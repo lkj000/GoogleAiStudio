@@ -1,9 +1,12 @@
+
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { AiGenerateIcon, CodeIcon, ConsoleIcon, ParametersIcon, PublishIcon, SaveIcon, TemplateIcon, TestIcon, VisualBuilderIcon, DownloadIcon } from './icons';
+import { AiGenerateIcon, CodeIcon, ConsoleIcon, ParametersIcon, PublishIcon, SaveIcon, TemplateIcon, TestIcon, VisualBuilderIcon, DownloadIcon, HomeIcon } from './icons';
 import TemplatesView from './TemplatesView';
 import { PluginTemplate, PluginParameter } from '../types';
-import { generatePluginFromDescription } from '../services/geminiService';
+import { generatePluginFromDescription, addModuleToProject } from '../services/geminiService';
 import Loader from './Loader';
+import ModulesView from './ModulesView';
 
 // --- Audio Feedback Hook ---
 const useSimpleSynth = () => {
@@ -11,27 +14,24 @@ const useSimpleSynth = () => {
     const oscillator = useRef<OscillatorNode | null>(null);
     const gainNode = useRef<GainNode | null>(null);
     const isInitialized = useRef(false);
+    const isInitializing = useRef(false);
 
     const initAudio = useCallback(() => {
-        if (isInitialized.current && audioCtx.current && audioCtx.current.state === 'running') {
+        if (isInitialized.current || isInitializing.current) {
+            if(audioCtx.current && audioCtx.current.state === 'suspended') {
+                audioCtx.current.resume();
+            }
             return;
         }
-
-        if (audioCtx.current && audioCtx.current.state === 'suspended') {
-            audioCtx.current.resume();
-            return;
-        }
+        isInitializing.current = true;
         
-        if (audioCtx.current && audioCtx.current.state === 'closed') {
-             isInitialized.current = false;
-             audioCtx.current = null;
-        }
-
         const context = new (window.AudioContext || (window as any).webkitAudioContext)();
-        audioCtx.current = context;
-
+        
         const setupNodes = () => {
-            if (!audioCtx.current || audioCtx.current.state === 'closed') return;
+            if (context.state === 'closed') {
+                isInitializing.current = false;
+                return;
+            };
 
             const osc = context.createOscillator();
             const gain = context.createGain();
@@ -46,11 +46,16 @@ const useSimpleSynth = () => {
 
             oscillator.current = osc;
             gainNode.current = gain;
+            audioCtx.current = context;
             isInitialized.current = true;
+            isInitializing.current = false;
         };
-
+        
         if (context.state === 'suspended') {
-            context.resume().then(setupNodes).catch(e => console.error("Audio context resume failed:", e));
+            context.resume().then(setupNodes).catch(e => {
+                console.error("Audio context resume failed:", e);
+                isInitializing.current = false;
+            });
         } else {
             setupNodes();
         }
@@ -61,29 +66,29 @@ const useSimpleSynth = () => {
             if (audioCtx.current && audioCtx.current.state !== 'closed') {
                 audioCtx.current.close().catch(console.error);
             }
-            audioCtx.current = null;
             isInitialized.current = false;
         };
     }, []);
 
     const playTone = useCallback((freq: number) => {
-        if (audioCtx.current && gainNode.current && oscillator.current && isInitialized.current) {
-            const now = audioCtx.current.currentTime;
-            gainNode.current.gain.cancelScheduledValues(now);
-            gainNode.current.gain.setValueAtTime(gainNode.current.gain.value, now);
-            gainNode.current.gain.linearRampToValueAtTime(0.1, now + 0.01);
-            oscillator.current.frequency.linearRampToValueAtTime(freq, now + 0.01);
-        }
+        if (!isInitialized.current || !audioCtx.current || !gainNode.current || !oscillator.current) return;
+        if (audioCtx.current.state !== 'running') return;
+        
+        const now = audioCtx.current.currentTime;
+        gainNode.current.gain.cancelScheduledValues(now);
+        gainNode.current.gain.setValueAtTime(gainNode.current.gain.value, now);
+        gainNode.current.gain.linearRampToValueAtTime(0.1, now + 0.01);
+        oscillator.current.frequency.linearRampToValueAtTime(freq, now + 0.01);
     }, []);
+    
+    const stopTone = useCallback((durationSeconds: number) => {
+        if (!isInitialized.current || !audioCtx.current || !gainNode.current) return;
+        if (audioCtx.current.state !== 'running') return;
 
-    const stopTone = useCallback(() => {
-        if (audioCtx.current && gainNode.current && isInitialized.current) {
-            if (audioCtx.current.state === 'closed') return;
-            const now = audioCtx.current.currentTime;
-            gainNode.current.gain.cancelScheduledValues(now);
-            gainNode.current.gain.setValueAtTime(gainNode.current.gain.value, now);
-            gainNode.current.gain.linearRampToValueAtTime(0, now + 0.05);
-        }
+        const now = audioCtx.current.currentTime;
+        gainNode.current.gain.cancelScheduledValues(now);
+        gainNode.current.gain.setValueAtTime(gainNode.current.gain.value, now);
+        gainNode.current.gain.linearRampToValueAtTime(0, now + durationSeconds);
     }, []);
 
     return { playTone, stopTone, initAudio };
@@ -111,60 +116,48 @@ const Knob: React.FC<{
     max?: number;
     onValueChange: (newValue: number) => void;
     playTone: (freq: number) => void;
-    stopTone: () => void;
+    stopTone: (durationSeconds: number) => void;
     initAudio: () => void;
-}> = ({ label, value, min = 0, max = 100, onValueChange, playTone, stopTone, initAudio }) => {
-    const knobRef = useRef<HTMLDivElement>(null);
+}> = ({ label, value = 0, min = 0, max = 100, onValueChange, playTone, stopTone, initAudio }) => {
     const [isDragging, setIsDragging] = useState(false);
-    const [dragStart, setDragStart] = useState({ y: 0, value: 0 });
     
-    const handleMouseDown = (e: React.MouseEvent) => {
-        initAudio(); // Initialize audio on first interaction
+    const handleMouseDown = useCallback((e: React.MouseEvent) => {
+        initAudio(); 
         e.preventDefault();
-        setIsDragging(true);
-        setDragStart({ y: e.clientY, value: value });
-        document.body.style.cursor = 'ns-resize';
-    };
 
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging) return;
-            const deltaY = dragStart.y - e.clientY; // Inverted for natural feel
+        const startY = e.clientY;
+        const startValue = value;
+
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+            const deltaY = startY - moveEvent.clientY;
             const range = max - min;
-            // FIX: Use a safe sensitivity value and prevent division by zero.
             const sensitivity = range > 0 ? range / 200 : 0.5;
-            let newValue = dragStart.value + deltaY * sensitivity;
+            let newValue = startValue + deltaY * sensitivity;
             newValue = Math.max(min, Math.min(max, newValue));
             onValueChange(newValue);
-            // FIX: Prevent division by zero when calculating tone frequency.
             playTone(200 + (range > 0 ? (newValue - min) / range : 0) * 600);
         };
 
         const handleMouseUp = () => {
-            setIsDragging(false);
             document.body.style.cursor = 'default';
-            stopTone();
-        };
-
-        if (isDragging) {
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUp);
-        }
-
-        return () => {
+            stopTone(0.05);
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isDragging, dragStart, min, max, onValueChange, playTone, stopTone]);
+        
+        document.body.style.cursor = 'ns-resize';
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp, { once: true });
 
-    // FIX: Prevent division by zero if min and max are equal.
+    }, [value, min, max, onValueChange, playTone, stopTone, initAudio]);
+
     const range = max - min;
     const percentage = range > 0 ? ((value - min) / range) * 100 : 0;
     const rotation = -135 + (percentage * 270) / 100;
 
 
     return (
-        <div className="flex flex-col items-center space-y-2 select-none" onMouseDown={handleMouseDown} ref={knobRef}>
+        <div className="flex flex-col items-center space-y-2 select-none" onMouseDown={handleMouseDown}>
             <div className="relative w-24 h-24 cursor-pointer">
                 <svg viewBox="0 0 100 100" className="w-full h-full">
                     <circle cx="50" cy="50" r="45" stroke="#373843" strokeWidth="8" fill="none" />
@@ -176,7 +169,6 @@ const Knob: React.FC<{
                         strokeLinecap="round"
                         style={{
                             strokeDasharray: 212.05,
-                            // FIX: Prevent division by zero for strokeDashoffset calculation.
                             strokeDashoffset: 212.05 * (1 - (range > 0 ? (value - min) / range : 0)),
                             transition: 'stroke-dashoffset 0.1s linear'
                         }}
@@ -198,7 +190,8 @@ const Knob: React.FC<{
 
 const WaveformDisplay: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const animationFrameId = useRef<number>();
+    // Fix: `useRef<number>()` is invalid TypeScript without an initial value. Initialize with `null` and update the type.
+    const animationFrameId = useRef<number | null>(null);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -298,19 +291,28 @@ const VisualBuilderView: React.FC<{ parameters: PluginTemplate['parameters'] }> 
         return () => clearInterval(interval);
     }, []);
 
-    // FIX: Wrap state update function in useCallback to stabilize the reference passed to child components.
-    // This prevents the `onValueChange` prop on `Knob` from being a new function on every render,
-    // which in turn prevents the `useEffect` inside `Knob` from re-running unnecessarily.
     const handleParamChange = useCallback((id: string, value: number) => {
         setParamValues(prev => ({...prev, [id]: value}));
     }, []);
+
+    const knobsToRender = parameters.filter(p => p.type === 'range');
+
+    if (knobsToRender.length === 0) {
+        return (
+            <div className="p-8 h-full flex flex-col justify-center items-center text-center">
+                <h3 className="text-xl font-bold text-primary mb-6">Visual Interface Builder</h3>
+                <p className="text-secondary mt-2">This plugin has no visual controls (like knobs or sliders) to display.</p>
+                <p className="text-secondary mt-1">You can view its full details in the 'Parameters' tab.</p>
+            </div>
+        );
+    }
 
     return (
         <div className="p-8 h-full flex flex-col">
             <h3 className="text-xl font-bold text-primary mb-6">Visual Interface Builder</h3>
             <div className="flex-grow bg-background/50 border border-surface rounded-xl p-6">
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8">
-                    {parameters.filter(p => p.type === 'range').map(param => (
+                    {knobsToRender.map(param => (
                         <Knob 
                             key={param.id} 
                             label={param.name} 
@@ -366,6 +368,11 @@ const ParametersView: React.FC<{ parameters: PluginTemplate['parameters'] }> = (
                             <td className="px-6 py-4">{p.min !== undefined && p.max !== undefined ? `${p.min} - ${p.max}` : 'N/A'}</td>
                         </tr>
                     ))}
+                     {parameters.length === 0 && (
+                        <tr>
+                            <td colSpan={5} className="text-center py-8 text-secondary">This plugin has no parameters defined.</td>
+                        </tr>
+                    )}
                 </tbody>
             </table>
         </div>
@@ -538,7 +545,7 @@ const AIGenerateView: React.FC<{ onPluginGenerated: (template: PluginTemplate, s
 
 // --- Main IDE Component ---
 
-type Tab = 'AI Generate' | 'Templates' | 'Code Editor' | 'Visual Builder' | 'Parameters' | 'Test' | 'Console' | 'Publish';
+type Tab = 'AI Generate' | 'Templates' | 'Modules' |'Code Editor' | 'Visual Builder' | 'Parameters' | 'Test' | 'Console' | 'Publish';
 
 const IdeTab: React.FC<{ icon: React.ReactNode; label: Tab; activeTab: Tab; onClick: (tab: Tab) => void; }> = ({ icon, label, activeTab, onClick }) => (
     <button
@@ -562,7 +569,7 @@ const PluginDevelopmentIDE: React.FC = () => {
     const [activeProject, setActiveProject] = useState<PluginTemplate | null>(null);
     const [projectCode, setProjectCode] = useState<string>('');
     const [consoleMessages, setConsoleMessages] = useState<string[]>(['Welcome to Amapiano AI Plugin IDE.']);
-    const [isCompiling, setIsCompiling] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false); // For both compiling and AI module adding
     const [contentKey, setContentKey] = useState(0); // Used to re-trigger animation
 
     useEffect(() => {
@@ -586,7 +593,7 @@ const PluginDevelopmentIDE: React.FC = () => {
     const handleSelectTemplate = (template: PluginTemplate, source: 'template' | 'ai' = 'template') => {
         setActiveProject(template);
         if (source === 'ai') {
-             logToConsole(`🤖 AI-Generated Plugin "<span class="text-accent-hover font-semibold">${template.name}</span>" loaded.`);
+             logToConsole(`🤖 AI-Generated Plugin "<span class="text-accent-hover font-semibold">${template.name}</span>" loaded. Check out its controls in the Visual Builder!`);
         } else {
             logToConsole(`📄 Template "<span class="text-accent-hover font-semibold">${template.name}</span>" loaded.`);
         }
@@ -603,7 +610,7 @@ const PluginDevelopmentIDE: React.FC = () => {
 
     const handleCompile = () => {
         if (!activeProject) return;
-        setIsCompiling(true);
+        setIsProcessing(true);
         setActiveTab('Console');
         logToConsole(`Starting compilation for "${activeProject.name}"...`);
         setTimeout(() => {
@@ -612,11 +619,32 @@ const PluginDevelopmentIDE: React.FC = () => {
                 logToConsole("✓ Linking WebAssembly module.");
                 setTimeout(() => {
                     logToConsole("✨ Build successful! Artifacts ready in /build folder.");
-                    setIsCompiling(false);
+                    setIsProcessing(false);
                 }, 800);
             }, 1000);
         }, 1200);
     };
+    
+    const handleAddModule = async (moduleName: string, moduleDescription: string) => {
+        if (!activeProject) return;
+
+        setIsProcessing(true);
+        setActiveTab('Console');
+        logToConsole(`🧠 Instructing AI to add <span class="text-vivid-sky-blue font-semibold">'${moduleName}'</span> module...`);
+
+        try {
+            const updatedProject = await addModuleToProject(activeProject, moduleName, moduleDescription);
+            setActiveProject(updatedProject);
+            logToConsole(`✅ AI successfully integrated the <span class="text-vivid-sky-blue font-semibold">'${moduleName}'</span> module.`);
+            logToConsole(`🚀 Switched to Visual Builder to see the new controls!`);
+            setActiveTab('Visual Builder');
+        } catch (e: any) {
+            logToConsole(`<span class="text-hot-pink">❌ AI Module Integration Failed: ${e.message}</span>`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
 
     const renderContent = () => {
         const noProject = !activeProject && !['Templates', 'AI Generate'].includes(activeTab);
@@ -634,7 +662,9 @@ const PluginDevelopmentIDE: React.FC = () => {
 
         switch (activeTab) {
             case 'Templates':
-                return <TemplatesView onSelectTemplate={(template) => handleSelectTemplate(template, 'template')} />;
+                return <TemplatesView onSelectTemplate={handleSelectTemplate} />;
+            case 'Modules':
+                return activeProject && <ModulesView onAddModule={handleAddModule} isProcessing={isProcessing} />;
             case 'Code Editor':
                 return activeProject && <CodeEditorView code={projectCode} onCodeChange={setProjectCode} />;
             case 'Visual Builder':
@@ -674,14 +704,14 @@ const PluginDevelopmentIDE: React.FC = () => {
                 </div>
                 <div className="flex items-center space-x-2">
                     <ActionButton disabled={!activeProject}><SaveIcon /> Save</ActionButton>
-                    <ActionButton primary onClick={handleCompile} disabled={!activeProject || isCompiling}>
-                         {isCompiling ? (
+                    <ActionButton primary onClick={handleCompile} disabled={!activeProject || isProcessing}>
+                         {isProcessing ? (
                             <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
                         ) : null}
-                        {isCompiling ? 'Compiling...' : 'Compile'}
+                        {isProcessing ? 'Processing...' : 'Compile'}
                     </ActionButton>
                     <ActionButton onClick={() => setActiveTab('Test')} disabled={!activeProject}>Test</ActionButton>
                     <ActionButton onClick={() => setActiveTab('Publish')} disabled={!activeProject}>Publish</ActionButton>
@@ -697,6 +727,7 @@ const PluginDevelopmentIDE: React.FC = () => {
             <div className="flex items-center border-b border-background overflow-x-auto">
                 <IdeTab icon={<AiGenerateIcon />} label="AI Generate" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<TemplateIcon />} label="Templates" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<HomeIcon />} label="Modules" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<CodeIcon />} label="Code Editor" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<VisualBuilderIcon />} label="Visual Builder" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<ParametersIcon />} label="Parameters" activeTab={activeTab} onClick={setActiveTab} />

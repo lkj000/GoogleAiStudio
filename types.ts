@@ -8,6 +8,8 @@ export interface PluginParameter {
   min?: number;
   max?: number;
   step?: number;
+  unit?: '%' | 'ms' | 'Hz' | 'dB'; // New: Add units for better UI
+  affects?: string; // New: Specify which module this param controls
 }
 
 export interface PluginTemplate {
