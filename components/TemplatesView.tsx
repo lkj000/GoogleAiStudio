@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { PluginTemplate, TemplateCategory } from '../types';
 import { SearchIcon, DownloadIcon } from './icons';
@@ -38,6 +39,165 @@ MyPluginAudioProcessor::~MyPluginAudioProcessor()
 // ... more JUCE boilerplate
 `;
 
+const vintageTapeVerbWebAudioCode = `
+class VintageTapeVerb {
+    constructor(audioContext) {
+        this.audioContext = audioContext;
+        this.input = this.audioContext.createGain();
+        this.output = this.audioContext.createGain();
+        this.wet = this.audioContext.createGain();
+        this.dry = this.audioContext.createGain();
+
+        this.preDelayNode = this.audioContext.createDelay(0.5); // Max 500ms pre-delay
+        this.convolver = this.audioContext.createConvolver();
+        this.toneFilter = this.audioContext.createBiquadFilter();
+        this.toneFilter.type = 'lowpass';
+        this.waveShaper = this.audioContext.createWaveShaper();
+        
+        // Signal Chain
+        this.input.connect(this.dry);
+        this.input.connect(this.preDelayNode);
+        this.preDelayNode.connect(this.convolver);
+        this.convolver.connect(this.toneFilter);
+        this.toneFilter.connect(this.waveShaper);
+        this.waveShaper.connect(this.wet);
+
+        this.dry.connect(this.output);
+        this.wet.connect(this.output);
+
+        // Initial Parameter Settings
+        this.setParam('decay', 60);
+        this.setParam('mix', 50);
+        this.setParam('saturation', 40);
+        this.setParam('preDelay', 20);
+        this.setParam('tone', 70);
+    }
+
+    setParam(id, value) {
+        const now = this.audioContext.currentTime;
+        if (id === 'mix') {
+            const mixValue = value / 100;
+            this.wet.gain.linearRampToValueAtTime(mixValue, now + 0.01);
+            this.dry.gain.linearRampToValueAtTime(1 - mixValue, now + 0.01);
+        } else if (id === 'saturation') {
+            this._setSaturation(value / 100);
+        } else if (id === 'decay') {
+            this._generateImpulseResponse(value / 100);
+        } else if (id === 'preDelay') {
+            const delayTime = value / 1000; // ms to seconds
+            this.preDelayNode.delayTime.linearRampToValueAtTime(delayTime, now + 0.01);
+        } else if (id === 'tone') {
+            // Map 0-100 to a logarithmic frequency range
+            const minFreq = 400;
+            const maxFreq = 20000;
+            const freq = minFreq * Math.pow(maxFreq / minFreq, value / 100);
+            this.toneFilter.frequency.linearRampToValueAtTime(freq, now + 0.01);
+        }
+    }
+
+    _setSaturation(value) { // value 0-1
+        const amount = value * 150; // Increased range for more pronounced effect
+        if (amount < 1) {
+            // If saturation is very low, bypass it to avoid artifacts
+            this.waveShaper.curve = null;
+            return;
+        }
+        const n_samples = 44100;
+        const curve = new Float32Array(n_samples);
+        const deg = Math.PI / 180;
+        for (let i = 0; i < n_samples; ++i) {
+          const x = i * 2 / n_samples - 1;
+          // A harder clipping curve for more character
+          curve[i] = ( (3 + amount) * x * 27 * deg ) / ( Math.PI + amount * Math.abs(x) );
+        }
+        this.waveShaper.curve = curve;
+        this.waveShaper.oversample = '4x'; // Improve quality
+    }
+
+    _generateImpulseResponse(decay = 0.6) { // decay 0-1
+        const sampleRate = this.audioContext.sampleRate;
+        const duration = 0.5 + decay * 3.5; // Longer max decay
+        const numSamples = sampleRate * duration;
+        const impulse = this.audioContext.createBuffer(2, numSamples, sampleRate);
+        for (let channel = 0; channel < 2; channel++) {
+            const channelData = impulse.getChannelData(channel);
+            for (let i = 0; i < numSamples; i++) {
+                // Exponential decay for a more natural reverb tail
+                channelData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / numSamples, 3.5);
+            }
+        }
+        this.convolver.buffer = impulse;
+    }
+}
+`;
+
+const ambientPadsWebAudioCode = `
+class AmbientPadGenerator {
+    constructor(audioContext) {
+        this.audioContext = audioContext;
+        this.output = this.audioContext.createGain();
+        this.oscillators = [];
+        
+        // Effects
+        this.filter = audioContext.createBiquadFilter();
+        this.filter.type = 'lowpass';
+        this.filter.frequency.value = 2000;
+
+        this.chorusLFO = audioContext.createOscillator();
+        this.chorusLFO.frequency.value = 0.2;
+        this.chorusDelay = audioContext.createDelay(0.1);
+        this.chorusDepth = audioContext.createGain();
+        this.chorusDepth.gain.value = 0.005;
+
+        this.chorusLFO.connect(this.chorusDepth);
+        this.chorusDepth.connect(this.chorusDelay.delayTime);
+        this.chorusLFO.start();
+
+        this.output.connect(this.filter);
+        this.filter.connect(this.chorusDelay);
+        this.filter.connect(this.audioContext.destination); // Dry
+        this.chorusDelay.connect(this.audioContext.destination); // Wet
+
+        this.attackTime = 0.6;
+        this.releaseTime = 0.8;
+    }
+
+    setParam(id, value) {
+        if (id === 'attack') this.attackTime = (value / 100) * 5;
+        if (id === 'release') this.releaseTime = (value / 100) * 5;
+        if (id === 'chorus') this.chorusDepth.gain.value = (value / 100) * 0.02;
+    }
+
+    play(note, time) {
+        const now = this.audioContext.currentTime;
+        const osc = this.audioContext.createOscillator();
+        osc.frequency.value = note;
+        osc.type = 'sawtooth';
+
+        const gainNode = this.audioContext.createGain();
+        gainNode.gain.setValueAtTime(0, now);
+        gainNode.gain.linearRampToValueAtTime(0.3, now + this.attackTime);
+        
+        osc.connect(gainNode);
+        gainNode.connect(this.output);
+        osc.start(time);
+        
+        this.oscillators.push({osc, gainNode});
+    }
+
+    stopAll(time) {
+        const now = this.audioContext.currentTime;
+        this.oscillators.forEach(({ osc, gainNode }) => {
+            gainNode.gain.cancelScheduledValues(now);
+            gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+            gainNode.gain.linearRampToValueAtTime(0, now + this.releaseTime);
+            osc.stop(now + this.releaseTime + 0.1);
+        });
+        this.oscillators = [];
+    }
+}
+`;
+
 
 const templatesData: PluginTemplate[] = [
     {
@@ -54,6 +214,7 @@ const templatesData: PluginTemplate[] = [
             { id: 'decay', name: 'Decay', type: 'range', defaultValue: 70, min: 10, max: 100, step: 1 },
         ],
         code: juceBoilerplate.replace('MyPlugin', 'AmapianoLogDrum'),
+        signalChain: ['Synth'],
     },
     {
         id: 'piano-one',
@@ -68,20 +229,24 @@ const templatesData: PluginTemplate[] = [
              { id: 'dynamics', name: 'Dynamics', type: 'range', defaultValue: 100, min: 0, max: 100, step: 1 },
         ],
         code: juceBoilerplate.replace('MyPlugin', 'PianoOne'),
+        signalChain: ['Sampler', 'Reverb'],
     },
     {
         id: 'vintage-tape-verb',
         name: 'Vintage Tape Verb',
         type: 'effect',
         framework: 'Web Audio',
-        description: 'A lush reverb effect that emulates classic tape machine saturation.',
-        tags: ['reverb', 'tape', 'vintage', 'saturation'],
+        description: 'Upgraded vintage reverb with pre-delay, tone shaping, and rich tape saturation on the reverb tail for deep, atmospheric spaces.',
+        tags: ['reverb', 'tape', 'vintage', 'saturation', 'lo-fi'],
         parameters: [
-             { id: 'mix', name: 'Mix', type: 'range', defaultValue: 50, min: 0, max: 100, step: 1 },
-             { id: 'decay', name: 'Decay', type: 'range', defaultValue: 60, min: 0, max: 100, step: 1 },
-             { id: 'saturation', name: 'Saturation', type: 'range', defaultValue: 40, min: 0, max: 100, step: 1 },
+             { id: 'mix', name: 'Mix', type: 'range', defaultValue: 50, min: 0, max: 100, step: 1, unit: '%', affects: 'Global' },
+             { id: 'decay', name: 'Decay', type: 'range', defaultValue: 60, min: 0, max: 100, step: 1, unit: '%', affects: 'Reverb' },
+             { id: 'preDelay', name: 'Pre Delay', type: 'range', defaultValue: 20, min: 0, max: 200, step: 1, unit: 'ms', affects: 'Reverb' },
+             { id: 'tone', name: 'Tone', type: 'range', defaultValue: 70, min: 0, max: 100, step: 1, unit: '%', affects: 'Reverb' },
+             { id: 'saturation', name: 'Saturation', type: 'range', defaultValue: 40, min: 0, max: 100, step: 1, unit: '%', affects: 'Saturation' },
         ],
-        code: `// Web Audio API implementation for Vintage Tape Verb...`,
+        code: vintageTapeVerbWebAudioCode,
+        signalChain: ['Pre Delay', 'Reverb', 'Tone', 'Saturation'],
     },
     {
         id: '808-sub-bass',
@@ -96,6 +261,7 @@ const templatesData: PluginTemplate[] = [
              { id: 'release', name: 'Release', type: 'range', defaultValue: 80, min: 0, max: 100, step: 1 },
         ],
         code: juceBoilerplate.replace('MyPlugin', 'SubBassSynth'),
+        signalChain: ['Synth', 'Saturation'],
     },
     {
         id: 'channel-strip-pro',
@@ -110,6 +276,7 @@ const templatesData: PluginTemplate[] = [
              { id: 'eqMidGain', name: 'Mid Gain', type: 'range', defaultValue: 0, min: -12, max: 12, step: 1 },
         ],
         code: juceBoilerplate.replace('MyPlugin', 'ChannelStripPro'),
+        signalChain: ['EQ', 'Compressor', 'Gate'],
     },
      {
         id: 'ambient-pads',
@@ -119,11 +286,12 @@ const templatesData: PluginTemplate[] = [
         description: 'Create evolving, atmospheric soundscapes and pads with ease.',
         tags: ['ambient', 'synth', 'pads', 'soundscape'],
         parameters: [
-             { id: 'attack', name: 'Attack', type: 'range', defaultValue: 60, min: 0, max: 100, step: 1 },
-             { id: 'release', name: 'Release', type: 'range', defaultValue: 80, min: 0, max: 100, step: 1 },
-             { id: 'chorus', name: 'Chorus', type: 'range', defaultValue: 40, min: 0, max: 100, step: 1 },
+             { id: 'attack', name: 'Attack', type: 'range', defaultValue: 60, min: 0, max: 100, step: 1, unit: '%', affects: 'Amp Env' },
+             { id: 'release', name: 'Release', type: 'range', defaultValue: 80, min: 0, max: 100, step: 1, unit: '%', affects: 'Amp Env' },
+             { id: 'chorus', name: 'Chorus', type: 'range', defaultValue: 40, min: 0, max: 100, step: 1, unit: '%', affects: 'Chorus' },
         ],
-        code: `// Web Audio API implementation for Ambient Pad Generator...`,
+        code: ambientPadsWebAudioCode,
+        signalChain: ['Synth', 'Chorus'],
     }
 ];
 

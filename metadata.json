@@ -1,5 +1,7 @@
 {
   "name": "AI Plugin Config Generator",
   "description": "An intelligent tool that uses Gemini to generate a JSON schema and a corresponding configuration form based on a natural language description of a plugin's purpose. Streamline your plugin development by letting AI handle the boilerplate.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

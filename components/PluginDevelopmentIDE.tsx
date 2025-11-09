@@ -1,343 +1,100 @@
 
 
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { AiGenerateIcon, CodeIcon, ConsoleIcon, ParametersIcon, PublishIcon, SaveIcon, TemplateIcon, TestIcon, VisualBuilderIcon, DownloadIcon, HomeIcon } from './icons';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { AiGenerateIcon, CodeIcon, ConsoleIcon, ParametersIcon, PublishIcon, SaveIcon, TemplateIcon, TestIcon, VisualBuilderIcon, DownloadIcon, SignalChainIcon, TimeStretchIcon, MidiHumanizerIcon, ArrangementIcon, ShareIcon, DocsIcon, PresetsIcon, AnalyzeIcon, DawIcon, SocialIcon } from './icons';
 import TemplatesView from './TemplatesView';
-import { PluginTemplate, PluginParameter } from '../types';
-import { generatePluginFromDescription, addModuleToProject } from '../services/geminiService';
+import { PluginTemplate, ArrangementPattern, ArrangementSection } from '../types';
+import { generatePluginFromDescription, addModuleToProject, generatePluginFromSmartTemplate, refactorSignalChain } from '../services/geminiService';
 import Loader from './Loader';
-import ModulesView from './ModulesView';
-
-// --- Audio Feedback Hook ---
-const useSimpleSynth = () => {
-    const audioCtx = useRef<AudioContext | null>(null);
-    const oscillator = useRef<OscillatorNode | null>(null);
-    const gainNode = useRef<GainNode | null>(null);
-    const isInitialized = useRef(false);
-    const isInitializing = useRef(false);
-
-    const initAudio = useCallback(() => {
-        if (isInitialized.current || isInitializing.current) {
-            if(audioCtx.current && audioCtx.current.state === 'suspended') {
-                audioCtx.current.resume();
-            }
-            return;
-        }
-        isInitializing.current = true;
-        
-        const context = new (window.AudioContext || (window as any).webkitAudioContext)();
-        
-        const setupNodes = () => {
-            if (context.state === 'closed') {
-                isInitializing.current = false;
-                return;
-            };
-
-            const osc = context.createOscillator();
-            const gain = context.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(440, context.currentTime);
-            gain.gain.setValueAtTime(0, context.currentTime);
-
-            osc.connect(gain);
-            gain.connect(context.destination);
-            osc.start();
-
-            oscillator.current = osc;
-            gainNode.current = gain;
-            audioCtx.current = context;
-            isInitialized.current = true;
-            isInitializing.current = false;
-        };
-        
-        if (context.state === 'suspended') {
-            context.resume().then(setupNodes).catch(e => {
-                console.error("Audio context resume failed:", e);
-                isInitializing.current = false;
-            });
-        } else {
-            setupNodes();
-        }
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            if (audioCtx.current && audioCtx.current.state !== 'closed') {
-                audioCtx.current.close().catch(console.error);
-            }
-            isInitialized.current = false;
-        };
-    }, []);
-
-    const playTone = useCallback((freq: number) => {
-        if (!isInitialized.current || !audioCtx.current || !gainNode.current || !oscillator.current) return;
-        if (audioCtx.current.state !== 'running') return;
-        
-        const now = audioCtx.current.currentTime;
-        gainNode.current.gain.cancelScheduledValues(now);
-        gainNode.current.gain.setValueAtTime(gainNode.current.gain.value, now);
-        gainNode.current.gain.linearRampToValueAtTime(0.1, now + 0.01);
-        oscillator.current.frequency.linearRampToValueAtTime(freq, now + 0.01);
-    }, []);
-    
-    const stopTone = useCallback((durationSeconds: number) => {
-        if (!isInitialized.current || !audioCtx.current || !gainNode.current) return;
-        if (audioCtx.current.state !== 'running') return;
-
-        const now = audioCtx.current.currentTime;
-        gainNode.current.gain.cancelScheduledValues(now);
-        gainNode.current.gain.setValueAtTime(gainNode.current.gain.value, now);
-        gainNode.current.gain.linearRampToValueAtTime(0, now + durationSeconds);
-    }, []);
-
-    return { playTone, stopTone, initAudio };
-};
+import ConsoleView from './ConsoleView';
+import VisualBuilderView from './VisualBuilderView';
+import SignalPatcher from './SignalPatcher';
+import * as audioEngine from '../services/audioEngine';
+import PlaybackControls from './PlaybackControls';
+import AutoTimeStretchView from './AutoTimeStretchView';
+import MidiHumanizerView from './MidiHumanizerView';
+import ArrangementAssistantView from './ArrangementAssistantView';
+import ShareView from './ShareView';
+import DocsView from './DocsView';
+import ErrorAlert from './ErrorAlert';
+import PresetsView from './PresetsView';
+import AnalyzeView from './AnalyzeView';
+import DAWView from './DAWView';
+import CommunityView from './CommunityView';
+import AIGenerateView from './AIGenerateView';
 
 
 // --- New View Components ---
 
-const CodeEditorView: React.FC<{ code: string, onCodeChange: (newCode: string) => void }> = ({ code, onCodeChange }) => {
+const highlightCode = (code: string, framework: 'JUCE' | 'Web Audio') => {
+    if (!code) return '';
+    let highlighted = code
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    
+    // Comments
+    highlighted = highlighted.replace(/(\/\/.*)/g, '<span style="color: #6A9955;">$1</span>'); // Green
+    highlighted = highlighted.replace(/(\/\*[\s\S]*?\*\/)/g, '<span style="color: #6A9955;">$1</span>'); // Green
+
+    // Strings
+    highlighted = highlighted.replace(/(".*?")/g, '<span style="color: #CE9178;">$1</span>'); // Orange
+    highlighted = highlighted.replace(/('.*?')/g, '<span style="color: #CE9178;">$1</span>'); // Orange
+
+    // Keywords
+    const keywords = framework === 'JUCE' 
+        ? ['#include', 'namespace', 'class', 'public', 'private', 'protected', 'virtual', 'override', 'void', 'float', 'int', 'double', 'const', 'return', 'if', 'else', 'for', 'while', 'new', 'delete', 'this', 'true', 'false', 'auto', 'using', 'struct', 'enum']
+        : ['class', 'constructor', 'this', 'const', 'let', 'var', 'return', 'if', 'else', 'for', 'while', 'new', 'function', 'true', 'false', 'import', 'export', 'from', 'async', 'await', 'extends'];
+    const keywordRegex = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
+    highlighted = highlighted.replace(keywordRegex, '<span style="color: #569CD6;">$1</span>'); // Blue
+
+    // Types/Classes (simple regex for PascalCase)
+    if (framework === 'JUCE') {
+         highlighted = highlighted.replace(/\b(juce::[A-Z][a-zA-Z0-9]+)\b/g, '<span style="color: #4EC9B0;">$1</span>'); // Teal
+         highlighted = highlighted.replace(/\b(std::[a-z]+)\b/g, '<span style="color: #4EC9B0;">$1</span>'); // Teal
+    }
+    
+    // Numbers
+    highlighted = highlighted.replace(/\b([0-9.]+f?)\b/g, '<span style="color: #B5CEA8;">$1</span>'); // Light green/purple
+    
+    // Function calls
+    highlighted = highlighted.replace(/([a-zA-Z0-9_]+)\(/g, '<span style="color: #DCDCAA;">$1</span>('); // Yellow
+
+    return highlighted;
+};
+
+const CodeEditorView: React.FC<{ code: string; onCodeChange: (newCode: string) => void; framework: 'JUCE' | 'Web Audio' }> = ({ code, onCodeChange, framework }) => {
+    const editorRef = useRef<HTMLTextAreaElement>(null);
+    // FIX: Changed ref type from HTMLElement to HTMLPreElement to match the element it's attached to.
+    const highlightRef = useRef<HTMLPreElement>(null);
+
+    const highlightedCode = React.useMemo(() => highlightCode(code, framework), [code, framework]);
+
+    const syncScroll = () => {
+        if (editorRef.current && highlightRef.current) {
+            highlightRef.current.scrollTop = editorRef.current.scrollTop;
+            highlightRef.current.scrollLeft = editorRef.current.scrollLeft;
+        }
+    };
+    
     return (
         <div className="p-4 h-full flex flex-col">
-            <textarea 
-                className="w-full flex-grow bg-[#1E1E1E] text-secondary font-mono text-sm p-4 rounded-lg border border-surface focus:outline-none focus:ring-2 focus:ring-accent resize-none"
-                value={code}
-                onChange={(e) => onCodeChange(e.target.value)}
-            />
-        </div>
-    );
-};
-
-const Knob: React.FC<{ 
-    label: string; 
-    value: number; 
-    min?: number; 
-    max?: number;
-    onValueChange: (newValue: number) => void;
-    playTone: (freq: number) => void;
-    stopTone: (durationSeconds: number) => void;
-    initAudio: () => void;
-}> = ({ label, value = 0, min = 0, max = 100, onValueChange, playTone, stopTone, initAudio }) => {
-    const [isDragging, setIsDragging] = useState(false);
-    
-    const handleMouseDown = useCallback((e: React.MouseEvent) => {
-        initAudio(); 
-        e.preventDefault();
-
-        const startY = e.clientY;
-        const startValue = value;
-
-        const handleMouseMove = (moveEvent: MouseEvent) => {
-            const deltaY = startY - moveEvent.clientY;
-            const range = max - min;
-            const sensitivity = range > 0 ? range / 200 : 0.5;
-            let newValue = startValue + deltaY * sensitivity;
-            newValue = Math.max(min, Math.min(max, newValue));
-            onValueChange(newValue);
-            playTone(200 + (range > 0 ? (newValue - min) / range : 0) * 600);
-        };
-
-        const handleMouseUp = () => {
-            document.body.style.cursor = 'default';
-            stopTone(0.05);
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-        
-        document.body.style.cursor = 'ns-resize';
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp, { once: true });
-
-    }, [value, min, max, onValueChange, playTone, stopTone, initAudio]);
-
-    const range = max - min;
-    const percentage = range > 0 ? ((value - min) / range) * 100 : 0;
-    const rotation = -135 + (percentage * 270) / 100;
-
-
-    return (
-        <div className="flex flex-col items-center space-y-2 select-none" onMouseDown={handleMouseDown}>
-            <div className="relative w-24 h-24 cursor-pointer">
-                <svg viewBox="0 0 100 100" className="w-full h-full">
-                    <circle cx="50" cy="50" r="45" stroke="#373843" strokeWidth="8" fill="none" />
-                    <path 
-                        d="M 14.64 85.36 A 45 45 0 1 1 85.36 85.36" // 270 degree arc
-                        stroke="url(#knob-gradient)" 
-                        strokeWidth="8" 
-                        fill="none" 
-                        strokeLinecap="round"
-                        style={{
-                            strokeDasharray: 212.05,
-                            strokeDashoffset: 212.05 * (1 - (range > 0 ? (value - min) / range : 0)),
-                            transition: 'stroke-dashoffset 0.1s linear'
-                        }}
-                    />
-                    <defs>
-                        <linearGradient id="knob-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" stopColor="#F72585" />
-                            <stop offset="100%" stopColor="#8A42D6" />
-                        </linearGradient>
-                    </defs>
-                     <line x1="50" y1="50" x2="50" y2="15" stroke="#F4F4F5" strokeWidth="3" strokeLinecap="round" transform={`rotate(${rotation} 50 50)`} />
-                </svg>
-                <div className="absolute inset-0 flex items-center justify-center text-primary font-bold text-lg">{value.toFixed(1)}</div>
-            </div>
-            <span className="text-sm text-secondary font-semibold">{label}</span>
-        </div>
-    );
-};
-
-const WaveformDisplay: React.FC = () => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    // Fix: `useRef<number>()` is invalid TypeScript without an initial value. Initialize with `null` and update the type.
-    const animationFrameId = useRef<number | null>(null);
-
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        
-        let time = 0;
-
-        const draw = () => {
-            time += 0.02;
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.lineWidth = 2;
-            
-            const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
-            gradient.addColorStop(0, '#4CC9F0');
-            gradient.addColorStop(1, '#F72585');
-            ctx.strokeStyle = gradient;
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#4CC9F0';
-            
-            ctx.beginPath();
-            const centerY = canvas.height / 2;
-            const amplitude = canvas.height / 3;
-
-            for (let x = 0; x < canvas.width; x++) {
-                const angle1 = (x / canvas.width) * Math.PI * 4 + time;
-                const angle2 = (x / canvas.width) * Math.PI * 10 + time * 0.5;
-                const y = centerY + Math.sin(angle1) * amplitude * 0.7 + Math.sin(angle2) * amplitude * 0.3;
-                if (x === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
-                }
-            }
-            ctx.stroke();
-            animationFrameId.current = requestAnimationFrame(draw);
-        };
-        draw();
-
-        return () => {
-            if(animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
-        }
-    }, []);
-
-    return <canvas ref={canvasRef} className="w-full h-full" width="600" height="150" />;
-}
-
-const LevelMeter: React.FC<{ value: number }> = ({ value }) => {
-    const segments = Array.from({ length: 20 });
-    return (
-        <div className="flex flex-col-reverse gap-1 bg-background p-1 rounded">
-            {segments.map((_, i) => {
-                const segmentValue = (i + 1) * 5;
-                const isOn = value >= segmentValue;
-                let colorClass = 'bg-green-500/30';
-                if (isOn) {
-                    if (segmentValue > 90) colorClass = 'bg-red-500';
-                    else if (segmentValue > 75) colorClass = 'bg-yellow-500';
-                    else colorClass = 'bg-green-500';
-                }
-                return <div key={i} className={`h-2 w-4 rounded-sm transition-colors duration-100 ${colorClass}`} />;
-            })}
-        </div>
-    );
-};
-
-const Fader: React.FC = () => (
-    <div className="flex flex-col items-center space-y-2">
-        <div className="relative w-4 h-48 bg-background rounded-full p-1">
-            <div className="absolute bottom-1/4 left-1/2 -translate-x-1/2 w-6 h-8 bg-primary rounded-sm cursor-pointer" />
-        </div>
-        <span className="text-xs text-secondary font-semibold">MASTER</span>
-    </div>
-);
-
-const VisualBuilderView: React.FC<{ parameters: PluginTemplate['parameters'] }> = ({ parameters }) => {
-    const { playTone, stopTone, initAudio } = useSimpleSynth();
-    const [paramValues, setParamValues] = useState<Record<string, number>>({});
-    const [meterLevel, setMeterLevel] = useState({ l: 0, r: 0 });
-
-    useEffect(() => {
-        const initialValues = parameters.reduce((acc, p) => {
-            acc[p.id] = p.defaultValue;
-            return acc;
-        }, {} as Record<string, number>);
-        setParamValues(initialValues);
-    }, [parameters]);
-    
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setMeterLevel({
-                l: Math.random() * 95 + 5,
-                r: Math.random() * 95 + 5
-            });
-        }, 150);
-        return () => clearInterval(interval);
-    }, []);
-
-    const handleParamChange = useCallback((id: string, value: number) => {
-        setParamValues(prev => ({...prev, [id]: value}));
-    }, []);
-
-    const knobsToRender = parameters.filter(p => p.type === 'range');
-
-    if (knobsToRender.length === 0) {
-        return (
-            <div className="p-8 h-full flex flex-col justify-center items-center text-center">
-                <h3 className="text-xl font-bold text-primary mb-6">Visual Interface Builder</h3>
-                <p className="text-secondary mt-2">This plugin has no visual controls (like knobs or sliders) to display.</p>
-                <p className="text-secondary mt-1">You can view its full details in the 'Parameters' tab.</p>
-            </div>
-        );
-    }
-
-    return (
-        <div className="p-8 h-full flex flex-col">
-            <h3 className="text-xl font-bold text-primary mb-6">Visual Interface Builder</h3>
-            <div className="flex-grow bg-background/50 border border-surface rounded-xl p-6">
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8">
-                    {knobsToRender.map(param => (
-                        <Knob 
-                            key={param.id} 
-                            label={param.name} 
-                            value={paramValues[param.id] || 0} 
-                            min={param.min} 
-                            max={param.max}
-                            onValueChange={(val) => handleParamChange(param.id, val)}
-                            playTone={playTone}
-                            stopTone={stopTone}
-                            initAudio={initAudio}
-                        />
-                    ))}
-                </div>
-            </div>
-             <div className="flex-shrink-0 mt-6 p-4 bg-background/50 border border-surface rounded-xl flex items-center gap-6">
-                <div className="flex-grow h-[150px]">
-                    <WaveformDisplay />
-                </div>
-                <div className="flex-shrink-0 flex items-end gap-4">
-                     <div className="flex items-center gap-2">
-                        <LevelMeter value={meterLevel.l}/>
-                        <LevelMeter value={meterLevel.r}/>
-                    </div>
-                    <Fader />
-                </div>
+            <div className="relative w-full flex-grow">
+                <pre 
+                    ref={highlightRef} 
+                    aria-hidden="true" 
+                    className="absolute top-0 left-0 w-full h-full m-0 p-4 bg-[#1E1E1E] text-secondary font-mono text-sm rounded-lg border border-surface overflow-auto pointer-events-none"
+                >
+                    <code dangerouslySetInnerHTML={{ __html: highlightedCode + '<br>' }} />
+                </pre>
+                <textarea 
+                    ref={editorRef}
+                    className="w-full h-full bg-transparent text-transparent caret-white font-mono text-sm p-4 rounded-lg border-2 border-transparent focus:outline-none focus:ring-2 focus:ring-accent resize-none absolute top-0 left-0"
+                    value={code}
+                    onChange={(e) => onCodeChange(e.target.value)}
+                    onScroll={syncScroll}
+                    spellCheck="false"
+                />
             </div>
         </div>
     );
@@ -356,6 +113,8 @@ const ParametersView: React.FC<{ parameters: PluginTemplate['parameters'] }> = (
                         <th scope="col" className="px-6 py-3">Type</th>
                         <th scope="col" className="px-6 py-3">Default</th>
                         <th scope="col" className="px-6 py-3">Range</th>
+                        <th scope="col" className="px-6 py-3">Unit</th>
+                        <th scope="col" className="px-6 py-3">Affects</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -366,11 +125,17 @@ const ParametersView: React.FC<{ parameters: PluginTemplate['parameters'] }> = (
                             <td className="px-6 py-4">{p.type}</td>
                             <td className="px-6 py-4">{p.defaultValue}</td>
                             <td className="px-6 py-4">{p.min !== undefined && p.max !== undefined ? `${p.min} - ${p.max}` : 'N/A'}</td>
+                            <td className="px-6 py-4">{p.unit || 'N/A'}</td>
+                            <td className="px-6 py-4">
+                                {p.affects ? (
+                                    <span className="bg-vivid-sky-blue/20 text-vivid-sky-blue text-xs font-semibold px-2 py-1 rounded-full">{p.affects}</span>
+                                ) : 'N/A'}
+                            </td>
                         </tr>
                     ))}
                      {parameters.length === 0 && (
                         <tr>
-                            <td colSpan={5} className="text-center py-8 text-secondary">This plugin has no parameters defined.</td>
+                            <td colSpan={7} className="text-center py-8 text-secondary">This plugin has no parameters defined.</td>
                         </tr>
                     )}
                 </tbody>
@@ -402,26 +167,6 @@ const TestView: React.FC = () => (
     </div>
 );
 
-const ConsoleView: React.FC<{ messages: string[] }> = ({ messages }) => {
-    const endOfMessagesRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        endOfMessagesRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [messages]);
-
-    return (
-        <div className="p-4 h-full bg-[#1E1E1E] rounded-b-xl flex flex-col">
-            <div className="flex-grow overflow-y-auto">
-                <pre className="text-xs text-secondary font-mono whitespace-pre-wrap">
-                    {messages.map((msg, i) => <div key={i} dangerouslySetInnerHTML={{ __html: msg }} />)}
-                </pre>
-                 <div ref={endOfMessagesRef} />
-            </div>
-        </div>
-    );
-};
-
-
 const PublishView: React.FC = () => (
      <div className="p-8 h-full max-w-lg mx-auto">
         <h3 className="text-xl font-bold text-primary mb-6">Publish Plugin</h3>
@@ -445,107 +190,9 @@ const PublishView: React.FC = () => (
     </div>
 );
 
-const AIGeneratedTemplateCard: React.FC<{ template: PluginTemplate; onSelect: (template: PluginTemplate) => void; }> = ({ template, onSelect }) => (
-    <div className="bg-surface/80 backdrop-blur-sm rounded-lg p-5 flex flex-col border-2 border-accent shadow-[0_0_15px_rgba(138,66,214,0.5)]">
-        <div className="flex-grow">
-            <div className="flex items-center space-x-4 mb-3">
-                 <div className="bg-accent/20 p-3 rounded-full text-accent">
-                    <AiGenerateIcon />
-                 </div>
-                 <div>
-                    <h3 className="text-lg font-bold text-primary">{template.name}</h3>
-                    <div className="flex items-center space-x-2 text-xs mt-1">
-                        <span className="bg-background text-secondary px-2 py-0.5 rounded">{template.type}</span>
-                        <span className="bg-background text-secondary px-2 py-0.5 rounded">{template.framework}</span>
-                    </div>
-                 </div>
-            </div>
-            <p className="text-secondary text-sm mb-4">{template.description}</p>
-            <div className="flex flex-wrap gap-2">
-                {template.tags.map(tag => <span className="bg-hot-pink/20 text-hot-pink text-xs font-medium px-2.5 py-1 rounded-full" key={tag}>{tag}</span>)}
-            </div>
-        </div>
-         <button onClick={() => onSelect(template)} className="mt-6 w-full flex items-center justify-center bg-accent text-primary font-semibold py-3 rounded-lg hover:bg-accent-hover transition-colors">
-            <DownloadIcon />
-            Load in Editor
-        </button>
-    </div>
-);
-
-
-const AIGenerateView: React.FC<{ onPluginGenerated: (template: PluginTemplate, source: 'ai') => void; log: (message: string) => void; }> = ({ onPluginGenerated, log }) => {
-    const [prompt, setPrompt] = useState('');
-    const [framework, setFramework] = useState<'JUCE' | 'Web Audio'>('JUCE');
-    const [isLoading, setIsLoading] = useState(false);
-    const [generatedPlugin, setGeneratedPlugin] = useState<PluginTemplate | null>(null);
-    const [error, setError] = useState<string | null>(null);
-
-    const handleGenerate = async () => {
-        if (!prompt.trim()) {
-            setError("Please enter a description for the plugin.");
-            return;
-        }
-        setIsLoading(true);
-        setError(null);
-        setGeneratedPlugin(null);
-        log(`✨ Kicking off AI generation for: "${prompt}"...`);
-        try {
-            const plugin = await generatePluginFromDescription(prompt, framework);
-            log(`✅ AI successfully generated plugin: <span class="text-accent-hover font-semibold">${plugin.name}</span>`);
-            setGeneratedPlugin(plugin);
-        } catch (e: any) {
-            log(`<span class="text-hot-pink">❌ AI Generation Failed: ${e.message}</span>`);
-            setError(e.message);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    return (
-        <div className="p-8 h-full flex flex-col items-center justify-center">
-            {isLoading && <Loader message="Generating with Amapiano AI..." />}
-            <div className="w-full max-w-3xl text-center">
-                 <h3 className="text-2xl font-bold text-primary mb-2">Create Anything</h3>
-                <p className="text-secondary mb-6 max-w-xl mx-auto">Describe the plugin, module, or instrument you can imagine. Our AI will bring it to life.</p>
-                
-                <div className="bg-surface p-4 rounded-xl border border-background">
-                    <textarea 
-                        placeholder="e.g., 'A wobbly lo-fi chorus effect with wow and flutter knobs'" 
-                        rows={3} 
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        className="w-full bg-background border border-surface rounded-md py-3 px-4 text-primary placeholder-secondary focus:outline-none focus:ring-2 focus:ring-accent resize-none"
-                    />
-
-                    <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                        <div className="flex items-center space-x-2 p-1 bg-background rounded-lg">
-                            <button onClick={() => setFramework('JUCE')} className={`px-4 py-1.5 text-sm font-semibold rounded-md transition-colors ${framework === 'JUCE' ? 'bg-accent text-white' : 'text-secondary hover:bg-surface'}`}>JUCE (C++)</button>
-                            <button onClick={() => setFramework('Web Audio')} className={`px-4 py-1.5 text-sm font-semibold rounded-md transition-colors ${framework === 'Web Audio' ? 'bg-accent text-white' : 'text-secondary hover:bg-surface'}`}>Web Audio (JS)</button>
-                        </div>
-
-                         <button onClick={handleGenerate} disabled={isLoading} className="w-full sm:w-auto bg-accent text-primary font-semibold py-2.5 px-6 rounded-lg hover:bg-accent-hover transition-colors flex items-center justify-center space-x-2 disabled:opacity-50">
-                            <AiGenerateIcon />
-                            <span>Generate Plugin</span>
-                        </button>
-                    </div>
-                </div>
-
-                {error && <p className="mt-4 text-hot-pink">{error}</p>}
-            </div>
-
-            {generatedPlugin && (
-                <div className="mt-8 w-full max-w-md">
-                    <AIGeneratedTemplateCard template={generatedPlugin} onSelect={() => onPluginGenerated(generatedPlugin, 'ai')} />
-                </div>
-            )}
-        </div>
-    );
-};
-
-
 // --- Main IDE Component ---
 
-type Tab = 'AI Generate' | 'Templates' | 'Modules' |'Code Editor' | 'Visual Builder' | 'Parameters' | 'Test' | 'Console' | 'Publish';
+type Tab = 'AI Generate' | 'Templates' | 'Social' | 'Time Stretch' | 'MIDI Humanizer' | 'Arrangement' | 'DAW' | 'Analyze' | 'Signal Chain' | 'Code Editor' | 'Visual Builder' | 'Parameters' | 'Presets' | 'Test' | 'Console' | 'Share' | 'Docs' | 'Publish';
 
 const IdeTab: React.FC<{ icon: React.ReactNode; label: Tab; activeTab: Tab; onClick: (tab: Tab) => void; }> = ({ icon, label, activeTab, onClick }) => (
     <button
@@ -563,6 +210,23 @@ const ActionButton: React.FC<{ children: React.ReactNode; primary?: boolean; cla
     </button>
 );
 
+const initialPatterns: ArrangementPattern[] = [
+    { id: 'p1', name: 'Log Drum Groove A', type: 'Drums', notes: [ { pitch: 60, start: 0, duration: 1, velocity: 100 }, { pitch: 60, start: 3, duration: 0.5, velocity: 90 } ] },
+    { id: 'p2', name: 'Shaker Loop', type: 'Drums', notes: [ { pitch: 76, start: 0.5, duration: 0.25, velocity: 80 }, { pitch: 76, start: 1.5, duration: 0.25, velocity: 80 } ] },
+    { id: 'p3', name: 'Sub Bass Line 1', type: 'Bass', notes: [ { pitch: 36, start: 0, duration: 4, velocity: 110 } ] },
+    { id: 'p4', name: 'Pad Chord Progression', type: 'Chords', notes: [ { pitch: 72, start: 0, duration: 4, velocity: 90 }, { pitch: 76, start: 0, duration: 4, velocity: 90 } ] },
+    { id: 'p5', name: 'Vocal Chop FX', type: 'FX', notes: [ { pitch: 84, start: 2, duration: 1, velocity: 100 } ] },
+    { id: 'p6', name: 'Synth Lead Riff', type: 'Lead', notes: [ { pitch: 81, start: 0, duration: 0.5, velocity: 120 }, { pitch: 79, start: 1, duration: 0.5, velocity: 120 } ] },
+];
+
+const initialArrangement: ArrangementSection[] = [
+    { name: 'Intro', length: 8, patterns: [] },
+    { name: 'Verse', length: 16, patterns: [] },
+    { name: 'Chorus', length: 16, patterns: [] },
+    { name: 'Verse', length: 16, patterns: [] },
+    { name: 'Chorus', length: 16, patterns: [] },
+    { name: 'Outro', length: 8, patterns: [] },
+];
 
 const PluginDevelopmentIDE: React.FC = () => {
     const [activeTab, setActiveTab] = useState<Tab>('Templates');
@@ -570,27 +234,62 @@ const PluginDevelopmentIDE: React.FC = () => {
     const [projectCode, setProjectCode] = useState<string>('');
     const [consoleMessages, setConsoleMessages] = useState<string[]>(['Welcome to Amapiano AI Plugin IDE.']);
     const [isProcessing, setIsProcessing] = useState(false); // For both compiling and AI module adding
+    const [compilationSuccess, setCompilationSuccess] = useState(false);
+    const [compileProgress, setCompileProgress] = useState<number | null>(null);
     const [contentKey, setContentKey] = useState(0); // Used to re-trigger animation
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [isAudioReady, setIsAudioReady] = useState(false);
+    const [globalError, setGlobalError] = useState<string | null>(null);
+    const [sampleGain, setSampleGain] = useState(1);
+    const [samplePlaybackRate, setSamplePlaybackRate] = useState(1);
+    const [paramValues, setParamValues] = useState<Record<string, number>>({});
+    const [patterns, setPatterns] = useState<ArrangementPattern[]>(initialPatterns);
+    const [arrangement, setArrangement] = useState<ArrangementSection[]>(initialArrangement);
 
-    useEffect(() => {
-        if (activeProject) {
-            setProjectCode(activeProject.code);
-        } else {
-            setProjectCode('');
-        }
-    }, [activeProject]);
+    const analyserNode = useRef<AnalyserNode | null>(null);
 
-    useEffect(() => {
-        setContentKey(prev => prev + 1);
-    }, [activeTab, activeProject]);
-
-
-    const logToConsole = (message: string) => {
+    const logToConsole = useCallback((message: string) => {
         const timestamp = new Date().toLocaleTimeString();
         setConsoleMessages(prev => [...prev, `<span class="text-gray-500">[${timestamp}]</span> ${message}`]);
-    };
+    }, []);
 
-    const handleSelectTemplate = (template: PluginTemplate, source: 'template' | 'ai' = 'template') => {
+    // Auto-save to localStorage
+    useEffect(() => {
+        if (activeProject) {
+            try {
+                const projectJson = JSON.stringify({ project: activeProject, arrangement, patterns });
+                localStorage.setItem('amapiano-ai-autosave', projectJson);
+            } catch (error) {
+                console.error("Auto-save failed:", error);
+            }
+        } else {
+            localStorage.removeItem('amapiano-ai-autosave');
+        }
+    }, [activeProject, arrangement, patterns]);
+
+    // Load from localStorage on mount
+    useEffect(() => {
+        try {
+            const savedProjectJson = localStorage.getItem('amapiano-ai-autosave');
+            if (savedProjectJson) {
+                const savedState = JSON.parse(savedProjectJson);
+                if (savedState.project && savedState.project.id) {
+                    setActiveProject(savedState.project);
+                    setArrangement(savedState.arrangement || initialArrangement);
+                    setPatterns(savedState.patterns || initialPatterns);
+                    const timestamp = new Date().toLocaleTimeString();
+                    setConsoleMessages(prev => [...prev, `<span class="text-gray-500">[${timestamp}]</span> Restored auto-saved project: <span class="text-accent-hover font-semibold">${savedState.project.name}</span>`]);
+                    setActiveTab('Visual Builder');
+                }
+            }
+        } catch (error) {
+            console.error("Failed to load auto-saved project:", error);
+            localStorage.removeItem('amapiano-ai-autosave'); // Clear corrupted data
+        }
+    }, []);
+
+    const handleSelectTemplate = useCallback((template: PluginTemplate, source: 'template' | 'ai' = 'template') => {
+        setCompilationSuccess(false);
         setActiveProject(template);
         if (source === 'ai') {
              logToConsole(`🤖 AI-Generated Plugin "<span class="text-accent-hover font-semibold">${template.name}</span>" loaded. Check out its controls in the Visual Builder!`);
@@ -598,36 +297,147 @@ const PluginDevelopmentIDE: React.FC = () => {
             logToConsole(`📄 Template "<span class="text-accent-hover font-semibold">${template.name}</span>" loaded.`);
         }
         setActiveTab('Visual Builder');
-    };
+    }, [logToConsole]);
+    
+    const handleLoadCommunityPlugin = useCallback((plugin: PluginTemplate) => {
+        setCompilationSuccess(false);
+        setActiveProject(plugin);
+        logToConsole(`🌐 Community plugin "<span class="text-accent-hover font-semibold">${plugin.name}</span>" loaded.`);
+        setActiveTab('Visual Builder');
+    }, [logToConsole]);
+
+    useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const projectData = urlParams.get('project');
+
+        if (projectData) {
+            try {
+                // Unicode-safe base64 decoding
+                const decodedJson = decodeURIComponent(atob(projectData));
+                const project: PluginTemplate = JSON.parse(decodedJson);
+                if (project && project.id && project.name) {
+                    logToConsole(`🔗 Loaded shared project: <span class="text-accent-hover font-semibold">${project.name}</span>`);
+                    handleSelectTemplate(project, 'ai');
+                    // Clean up the URL to avoid reloading the same project on refresh
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                }
+            } catch (error) {
+                console.error("Failed to load shared project from URL:", error);
+                logToConsole('<span class="text-hot-pink">Error: Could not load the shared project. The link may be corrupted.</span>');
+            }
+        }
+    }, [logToConsole, handleSelectTemplate]);
+
+    useEffect(() => {
+        const init = async () => {
+            try {
+                const analyser = await audioEngine.init();
+                analyserNode.current = analyser;
+                setIsAudioReady(true);
+            } catch (error: any) {
+                console.error("Failed to initialize audio engine:", error);
+                const userMessage = "Audio engine failed to start. Please allow microphone access or refresh the page.";
+                logToConsole(`<span class="text-hot-pink">Error: ${userMessage}</span>`);
+                setGlobalError(userMessage);
+            }
+        };
+        init();
+    }, [logToConsole]);
+
+    useEffect(() => {
+        if (activeProject) {
+            setProjectCode(activeProject.code);
+
+            const initialValues = activeProject.parameters.reduce((acc, p) => {
+                acc[p.id] = p.defaultValue;
+                return acc;
+            }, {} as Record<string, number>);
+            setParamValues(initialValues);
+
+            if (activeProject.framework === 'Web Audio') {
+                audioEngine.connectPlugin(activeProject);
+                 for (const [id, value] of Object.entries(initialValues)) {
+                    audioEngine.setParam(id, value as number);
+                }
+            } else {
+                audioEngine.disconnectPlugin();
+            }
+        } else {
+            setProjectCode('');
+            audioEngine.disconnectPlugin();
+        }
+    }, [activeProject]);
+
+    useEffect(() => {
+        setContentKey(prev => prev + 1);
+    }, [activeTab, activeProject]);
+
+    const handleParamChange = useCallback((id: string, value: number) => {
+        setParamValues(prev => ({...prev, [id]: value}));
+        if (activeProject && activeProject.framework === 'Web Audio') {
+            audioEngine.setParam(id, value);
+        }
+    }, [activeProject]);
+
+    const handleApplyPreset = useCallback((values: Record<string, number>) => {
+        setParamValues(values);
+        if (activeProject && activeProject.framework === 'Web Audio') {
+            for (const [id, value] of Object.entries(values)) {
+                audioEngine.setParam(id, value);
+            }
+        }
+    }, [activeProject]);
     
     const handleCloseProject = () => {
         if (activeProject) {
             logToConsole(`Project "<span class="text-accent-hover font-semibold">${activeProject.name}</span>" closed.`);
         }
+        if (isPlaying) {
+            audioEngine.stopSampleLoop();
+            audioEngine.stopDAW();
+            setIsPlaying(false);
+        }
         setActiveProject(null);
+        setCompilationSuccess(false);
         setActiveTab('Templates');
     };
 
-    const handleCompile = () => {
+    const handleCompile = async () => {
         if (!activeProject) return;
+        setCompilationSuccess(false);
         setIsProcessing(true);
+        setCompileProgress(0);
         setActiveTab('Console');
-        logToConsole(`Starting compilation for "${activeProject.name}"...`);
-        setTimeout(() => {
-            logToConsole("✓ C++ files processed.");
-            setTimeout(() => {
-                logToConsole("✓ Linking WebAssembly module.");
-                setTimeout(() => {
-                    logToConsole("✨ Build successful! Artifacts ready in /build folder.");
-                    setIsProcessing(false);
-                }, 800);
-            }, 1000);
-        }, 1200);
+        logToConsole(`Starting cloud build for "${activeProject.name}"...`);
+
+        const steps = [
+            "Packaging source files...",
+            "Authenticating with build service...",
+            "Uploading (5.2 MB)...",
+            "Build queued on `macos-arm64` runner...",
+            "Installing JUCE dependencies...",
+            "Compiling PluginProcessor.cpp...",
+            "Compiling PluginEditor.cpp...",
+            "Linking...",
+            "Signing artifact...",
+        ];
+        
+        for (const [index, step] of steps.entries()) {
+            await new Promise(resolve => setTimeout(resolve, Math.random() * 500 + 200));
+            logToConsole(`✓ ${step}`);
+            setCompileProgress(((index + 1) / steps.length) * 100);
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 500));
+        logToConsole("✨ Build successful! Artifacts ready for export.");
+        setIsProcessing(false);
+        setCompilationSuccess(true);
     };
     
     const handleAddModule = async (moduleName: string, moduleDescription: string) => {
         if (!activeProject) return;
-
+        setCompilationSuccess(false);
+        setCompileProgress(null);
         setIsProcessing(true);
         setActiveTab('Console');
         logToConsole(`🧠 Instructing AI to add <span class="text-vivid-sky-blue font-semibold">'${moduleName}'</span> module...`);
@@ -636,8 +446,8 @@ const PluginDevelopmentIDE: React.FC = () => {
             const updatedProject = await addModuleToProject(activeProject, moduleName, moduleDescription);
             setActiveProject(updatedProject);
             logToConsole(`✅ AI successfully integrated the <span class="text-vivid-sky-blue font-semibold">'${moduleName}'</span> module.`);
-            logToConsole(`🚀 Switched to Visual Builder to see the new controls!`);
-            setActiveTab('Visual Builder');
+            logToConsole(`🚀 The new module has been added to your Signal Chain!`);
+            setActiveTab('Signal Chain');
         } catch (e: any) {
             logToConsole(`<span class="text-hot-pink">❌ AI Module Integration Failed: ${e.message}</span>`);
         } finally {
@@ -645,9 +455,64 @@ const PluginDevelopmentIDE: React.FC = () => {
         }
     };
 
+    const handleReorderChain = async (newChain: string[]) => {
+        if (!activeProject) return;
+        setCompilationSuccess(false);
+        setCompileProgress(null);
+        setIsProcessing(true);
+        setActiveTab('Console');
+        logToConsole(`🧠 Instructing AI to refactor signal chain...`);
+        try {
+            const updatedProject = await refactorSignalChain(activeProject, newChain);
+            setActiveProject(updatedProject);
+            logToConsole(`✅ AI successfully refactored the signal chain order.`);
+        } catch (e: any) {
+             logToConsole(`<span class="text-hot-pink">❌ AI Signal Chain Refactor Failed: ${e.message}</span>`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const togglePlay = async () => {
+        if (isPlaying) {
+            if (activeTab === 'DAW') {
+                audioEngine.stopDAW();
+            } else {
+                audioEngine.stopSampleLoop();
+            }
+            setIsPlaying(false);
+        } else {
+            if (activeTab === 'DAW') {
+                if (activeProject?.type === 'instrument') {
+                    audioEngine.playDAW(arrangement, 110, (p) => { /* set playhead pos */ });
+                    setIsPlaying(true);
+                } else {
+                    logToConsole(`<span class="text-hot-pink">DAW playback is only available for 'instrument' type plugins.</span>`);
+                }
+            } else {
+                await audioEngine.playSampleLoop();
+                setIsPlaying(true);
+            }
+        }
+    };
+
+    const handleGainChange = (newGain: number) => {
+        setSampleGain(newGain);
+        audioEngine.setSampleGain(newGain);
+    };
+
+    const handleRateChange = (newRate: number) => {
+        setSamplePlaybackRate(newRate);
+        audioEngine.setSamplePlaybackRate(newRate);
+    };
+
+    const showSamplePlaybackControls = activeProject?.framework === 'Web Audio' && activeTab !== 'DAW' && activeTab !== 'Arrangement';
+
 
     const renderContent = () => {
-        const noProject = !activeProject && !['Templates', 'AI Generate'].includes(activeTab);
+        const noProjectViews: Tab[] = ['Templates', 'AI Generate', 'Social', 'Time Stretch', 'MIDI Humanizer', 'Arrangement', 'DAW'];
+        const noProject = !activeProject && !noProjectViews.includes(activeTab);
+
         if (noProject) {
              return (
                 <div className="p-8 text-center text-secondary h-full flex flex-col justify-center items-center">
@@ -663,18 +528,36 @@ const PluginDevelopmentIDE: React.FC = () => {
         switch (activeTab) {
             case 'Templates':
                 return <TemplatesView onSelectTemplate={handleSelectTemplate} />;
-            case 'Modules':
-                return activeProject && <ModulesView onAddModule={handleAddModule} isProcessing={isProcessing} />;
+            case 'Social':
+                return <CommunityView onLoadPlugin={handleLoadCommunityPlugin} />;
+            case 'Time Stretch':
+                return <AutoTimeStretchView />;
+            case 'MIDI Humanizer':
+                return <MidiHumanizerView />;
+            case 'Arrangement':
+                return <ArrangementAssistantView patterns={patterns} arrangement={arrangement} onArrangementChange={setArrangement} />;
+            case 'DAW':
+                return <DAWView arrangement={arrangement} patterns={patterns} isPlaying={isPlaying} />;
+            case 'Analyze':
+                return activeProject && <AnalyzeView project={activeProject} analyserNode={analyserNode.current} paramValues={paramValues} log={logToConsole} />;
+            case 'Signal Chain':
+                return activeProject && <SignalPatcher project={activeProject} onReorder={handleReorderChain} onAddModule={handleAddModule} isProcessing={isProcessing} />;
             case 'Code Editor':
-                return activeProject && <CodeEditorView code={projectCode} onCodeChange={setProjectCode} />;
+                return activeProject && <CodeEditorView code={projectCode} onCodeChange={setProjectCode} framework={activeProject.framework} />;
             case 'Visual Builder':
-                return activeProject && <VisualBuilderView parameters={activeProject.parameters} />;
+                return activeProject && <VisualBuilderView project={activeProject} analyserNode={analyserNode.current} paramValues={paramValues} onParamChange={handleParamChange} />;
             case 'Parameters':
                 return activeProject && <ParametersView parameters={activeProject.parameters} />;
+            case 'Presets':
+                return activeProject && <PresetsView project={activeProject} log={logToConsole} onApplyPreset={handleApplyPreset} />;
             case 'Test':
                 return activeProject && <TestView />;
             case 'Console':
-                return <ConsoleView messages={consoleMessages} />;
+                return <ConsoleView messages={consoleMessages} compilationSuccess={compilationSuccess} project={activeProject} isProcessing={isProcessing} compileProgress={compileProgress} />;
+            case 'Share':
+                return activeProject && <ShareView project={activeProject} />;
+            case 'Docs':
+                return activeProject && <DocsView project={activeProject} log={logToConsole} />;
             case 'Publish':
                 return activeProject && <PublishView />;
             case 'AI Generate':
@@ -688,6 +571,7 @@ const PluginDevelopmentIDE: React.FC = () => {
 
     return (
         <div className="bg-surface rounded-xl border border-background shadow-2xl overflow-hidden shadow-accent-glow/10">
+            {globalError && <ErrorAlert message={globalError} onDismiss={() => setGlobalError(null)} />}
             {/* IDE Header */}
             <div className="p-4 flex items-center justify-between border-b border-background bg-surface/80 backdrop-blur-sm">
                 <div className="flex items-center space-x-4">
@@ -703,9 +587,25 @@ const PluginDevelopmentIDE: React.FC = () => {
                     </div>
                 </div>
                 <div className="flex items-center space-x-2">
+                    {showSamplePlaybackControls && isAudioReady && (
+                         <PlaybackControls
+                            isPlaying={isPlaying}
+                            onTogglePlay={togglePlay}
+                            gain={sampleGain}
+                            onGainChange={handleGainChange}
+                            playbackRate={samplePlaybackRate}
+                            onRateChange={handleRateChange}
+                            log={logToConsole}
+                        />
+                    )}
+                    {activeTab === 'DAW' && (
+                         <ActionButton onClick={togglePlay}>
+                            {isPlaying ? "Stop DAW" : "Play DAW"}
+                         </ActionButton>
+                    )}
                     <ActionButton disabled={!activeProject}><SaveIcon /> Save</ActionButton>
                     <ActionButton primary onClick={handleCompile} disabled={!activeProject || isProcessing}>
-                         {isProcessing ? (
+                         {isProcessing && compileProgress !== null ? (
                             <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -727,12 +627,21 @@ const PluginDevelopmentIDE: React.FC = () => {
             <div className="flex items-center border-b border-background overflow-x-auto">
                 <IdeTab icon={<AiGenerateIcon />} label="AI Generate" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<TemplateIcon />} label="Templates" activeTab={activeTab} onClick={setActiveTab} />
-                <IdeTab icon={<HomeIcon />} label="Modules" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<SocialIcon />} label="Social" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<TimeStretchIcon />} label="Time Stretch" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<MidiHumanizerIcon />} label="MIDI Humanizer" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<ArrangementIcon />} label="Arrangement" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<DawIcon />} label="DAW" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<AnalyzeIcon />} label="Analyze" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<SignalChainIcon />} label="Signal Chain" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<CodeIcon />} label="Code Editor" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<VisualBuilderIcon />} label="Visual Builder" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<ParametersIcon />} label="Parameters" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<PresetsIcon />} label="Presets" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<TestIcon />} label="Test" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<ConsoleIcon />} label="Console" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<ShareIcon />} label="Share" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<DocsIcon />} label="Docs" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<PublishIcon />} label="Publish" activeTab={activeTab} onClick={setActiveTab} />
             </div>
 
