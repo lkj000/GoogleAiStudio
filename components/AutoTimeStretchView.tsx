@@ -1,9 +1,11 @@
 
 
-import React, { useState } from 'react';
-import { PlayIcon } from './icons';
+
+import React, { useState, useEffect } from 'react';
+import { PlayIcon, StopIcon } from './icons';
 import { timeStretchAudio } from '../services/audioProcessingService';
 import Loader from './Loader';
+import * as audioEngine from '../services/audioEngine';
 
 const Waveform: React.FC<{ color: string }> = ({ color }) => (
     <svg className="w-full h-full" viewBox="0 0 300 80" preserveAspectRatio="none">
@@ -14,13 +16,17 @@ const Waveform: React.FC<{ color: string }> = ({ color }) => (
 const AutoTimeStretchView: React.FC = () => {
     const [originalBPM, setOriginalBPM] = useState(90);
     const [targetBPM, setTargetBPM] = useState(110);
-    // FIX: Explicitly type the state to match the function's expected parameter type.
     const [algorithm, setAlgorithm] = useState<'percussive' | 'tonal' | 'speech'>('percussive');
     const [isStretched, setIsStretched] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [activePlayback, setActivePlayback] = useState<'none' | 'original' | 'stretched'>('none');
 
     const handleStretch = async () => {
+        if (activePlayback !== 'none') {
+            audioEngine.stopSampleLoop();
+            setActivePlayback('none');
+        }
         setIsLoading(true);
         setError(null);
         setIsStretched(false);
@@ -33,6 +39,40 @@ const AutoTimeStretchView: React.FC = () => {
             setIsLoading(false);
         }
     };
+    
+    const handlePlayOriginal = async () => {
+        if (activePlayback === 'original') {
+            audioEngine.stopSampleLoop();
+            setActivePlayback('none');
+        } else {
+            await audioEngine.setSamplePlaybackRate(1.0);
+            await audioEngine.playSampleLoop();
+            setActivePlayback('original');
+        }
+    };
+
+    const handlePlayStretched = async () => {
+        if (activePlayback === 'stretched') {
+            audioEngine.stopSampleLoop();
+            setActivePlayback('none');
+        } else {
+            const stretchFactor = targetBPM / originalBPM;
+            await audioEngine.setSamplePlaybackRate(stretchFactor);
+            await audioEngine.playSampleLoop();
+            setActivePlayback('stretched');
+        }
+    };
+
+    useEffect(() => {
+        // Cleanup function to stop audio when the component unmounts or view changes
+        return () => {
+            if (activePlayback !== 'none') {
+                audioEngine.stopSampleLoop();
+                audioEngine.setSamplePlaybackRate(1.0); // Reset rate
+            }
+        };
+    }, [activePlayback]);
+
 
     return (
         <div className="p-8 h-full relative">
@@ -47,7 +87,9 @@ const AutoTimeStretchView: React.FC = () => {
                         <div className="bg-surface p-4 rounded-lg border border-background">
                             <div className="flex items-center justify-between mb-3">
                                 <span className="font-mono text-sm text-secondary">log_drum_loop_90bpm.wav</span>
-                                <button className="p-2 rounded-full text-secondary hover:bg-background hover:text-primary"><PlayIcon /></button>
+                                <button onClick={handlePlayOriginal} className={`p-2 rounded-full text-secondary transition-colors ${activePlayback === 'original' ? 'bg-hot-pink/20 text-hot-pink' : 'hover:bg-background hover:text-primary'}`}>
+                                    {activePlayback === 'original' ? <StopIcon /> : <PlayIcon />}
+                                </button>
                             </div>
                             <div className="h-20">
                                 <Waveform color="#A0A0B0" />
@@ -59,7 +101,11 @@ const AutoTimeStretchView: React.FC = () => {
                         <div className={`bg-surface p-4 rounded-lg border ${isStretched ? 'border-accent' : 'border-background'}`}>
                              <div className="flex items-center justify-between mb-3">
                                 <span className="font-mono text-sm text-accent">{isStretched ? `log_drum_loop_${targetBPM}bpm.wav` : '...'}</span>
-                                {isStretched && <button className="p-2 rounded-full text-secondary hover:bg-background hover:text-primary"><PlayIcon /></button>}
+                                {isStretched && (
+                                     <button onClick={handlePlayStretched} className={`p-2 rounded-full text-secondary transition-colors ${activePlayback === 'stretched' ? 'bg-hot-pink/20 text-hot-pink' : 'hover:bg-background hover:text-primary'}`}>
+                                        {activePlayback === 'stretched' ? <StopIcon /> : <PlayIcon />}
+                                    </button>
+                                )}
                             </div>
                             <div className="h-20 opacity-0 data-[active=true]:opacity-100 transition-opacity" data-active={isStretched}>
                                 <Waveform color="#8A42D6" />
@@ -81,7 +127,6 @@ const AutoTimeStretchView: React.FC = () => {
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-secondary mb-1">Algorithm Mode</label>
-                            {/* FIX: Cast the value from the onChange event to the correct type. */}
                             <select value={algorithm} onChange={e => setAlgorithm(e.target.value as 'percussive' | 'tonal' | 'speech')} className="w-full bg-background border border-surface rounded-md py-2 px-3 text-primary focus:outline-none focus:ring-2 focus:ring-accent">
                                 <option value="percussive">Percussive</option>
                                 <option value="tonal">Tonal</option>

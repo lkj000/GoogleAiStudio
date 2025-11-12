@@ -1,10 +1,11 @@
+
 // components/RealtimeSpectrogram.tsx
 import React, { useRef, useEffect } from 'react';
 
 const RealtimeSpectrogram: React.FC<{ analyserNode: AnalyserNode }> = ({ analyserNode }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    // FIX: Correctly type the ref. useRef without an argument makes the value potentially undefined.
-    const animationFrameId = useRef<number | undefined>();
+    // FIX: Initialize useRef with null to provide an initial value.
+    const animationFrameId = useRef<number | null>(null);
 
     useEffect(() => {
         const canvas = canvasRef.current;

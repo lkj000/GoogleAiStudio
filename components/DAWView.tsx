@@ -1,173 +1,192 @@
 
+import React, { useState, useEffect, useCallback } from 'react';
+import { DAWTrack } from '../types';
+import * as audioEngine from '../services/audioEngine';
+import { PlayIcon, StopIcon, SpeakerIcon, MuteIcon, MicrophoneIcon, UploadIcon } from './icons';
+import Loader from './Loader';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { ArrangementSection, ArrangementPattern } from '../types';
-import { SpeakerIcon, MuteIcon } from './icons';
-
-const PIXELS_PER_BEAT = 40;
-const TRACK_HEIGHT = 60; // in pixels
-
-const PatternClip: React.FC<{ pattern: ArrangementPattern, sectionStartBeats: number, sectionLengthBeats: number }> = ({ pattern, sectionStartBeats, sectionLengthBeats }) => {
-    const typeColor = {
-        Drums: 'bg-hot-pink/80 border-hot-pink',
-        Bass: 'bg-vivid-sky-blue/80 border-vivid-sky-blue',
-        Melody: 'bg-accent/80 border-accent',
-        Chords: 'bg-yellow-500/80 border-yellow-500',
-        Lead: 'bg-green-500/80 border-green-500',
-        FX: 'bg-secondary/80 border-gray-500',
-    };
-    
+const TrackControls: React.FC<{
+    track: DAWTrack;
+    onVolumeChange: (id: string, value: number) => void;
+    onPanChange: (id: string, value: number) => void;
+    onMuteToggle: (id: string, isMuted: boolean) => void;
+    onSoloToggle: (id: string, isSoloed: boolean) => void;
+}> = ({ track, onVolumeChange, onPanChange, onMuteToggle, onSoloToggle }) => {
     return (
-        <div 
-            className={`absolute h-12 top-1/2 -translate-y-1/2 rounded-lg text-white text-xs font-semibold flex items-center px-3 border-l-4 ${typeColor[pattern.type]}`}
-            style={{
-                left: `${sectionStartBeats * PIXELS_PER_BEAT}px`,
-                width: `${sectionLengthBeats * PIXELS_PER_BEAT}px`
-            }}
-        >
-            {pattern.name}
+        <div className="h-full bg-surface border-b border-r border-background flex flex-col p-2 space-y-2">
+            <div className="font-bold text-primary truncate text-sm">{track.name}</div>
+            <div className="flex items-center space-x-1">
+                <button 
+                    onClick={() => onMuteToggle(track.id, !track.isMuted)}
+                    className={`px-2 py-1 text-xs font-bold rounded ${track.isMuted ? 'bg-hot-pink text-white' : 'bg-background text-secondary'}`}
+                >
+                    M
+                </button>
+                <button 
+                    onClick={() => onSoloToggle(track.id, !track.isSoloed)}
+                    className={`px-2 py-1 text-xs font-bold rounded ${track.isSoloed ? 'bg-yellow-400 text-black' : 'bg-background text-secondary'}`}
+                >
+                    S
+                </button>
+            </div>
+            <div className="flex-grow space-y-1">
+                <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={track.volume}
+                    onChange={(e) => onVolumeChange(track.id, parseFloat(e.target.value))}
+                    className="w-full h-1 bg-background rounded-lg appearance-none cursor-pointer accent-accent"
+                    title="Volume"
+                />
+                <input
+                    type="range"
+                    min="-1"
+                    max="1"
+                    step="0.01"
+                    value={track.pan}
+                    onChange={(e) => onPanChange(track.id, parseFloat(e.target.value))}
+                    className="w-full h-1 bg-background rounded-lg appearance-none cursor-pointer accent-vivid-sky-blue"
+                    title="Pan"
+                />
+            </div>
         </div>
     );
 };
 
-const TrackHeader: React.FC<{ trackName: string }> = ({ trackName }) => (
-    <div className="h-full bg-surface border-b border-r border-background flex items-center px-4">
-        <div className="flex items-center space-x-2">
-            <button className="p-1 rounded text-secondary hover:bg-background"><SpeakerIcon /></button>
-            <span className="font-bold text-primary">{trackName}</span>
-        </div>
-    </div>
-);
-
-interface DAWViewProps {
-    arrangement: ArrangementSection[];
-    patterns: ArrangementPattern[];
-    isPlaying: boolean;
-}
-
-const DAWView: React.FC<DAWViewProps> = ({ arrangement, patterns, isPlaying }) => {
-    const timelineContainerRef = useRef<HTMLDivElement>(null);
-    const playheadRef = useRef<HTMLDivElement>(null);
-    // FIX: Correctly type the ref. useRef without an argument makes the value potentially undefined.
-    const animationFrameId = useRef<number | undefined>();
-
-    const tracks = useMemo(() => {
-        const trackNames = new Set(patterns.map(p => p.type));
-        return Array.from(trackNames).sort();
-    }, [patterns]);
-
-    const totalBeats = useMemo(() => {
-        return arrangement.reduce((sum, section) => sum + section.length * 4, 0);
-    }, [arrangement]);
-
-    // FIX: Pre-calculate section start times to avoid state mutations during render.
-    const sectionsWithStartBeats = useMemo(() => {
-        let beatTracker = 0;
-        return arrangement.map(section => {
-            const sectionWithStart = {
-                ...section,
-                startBeat: beatTracker,
-            };
-            beatTracker += section.length * 4;
-            return sectionWithStart;
-        });
-    }, [arrangement]);
-
-
-    // Simple playhead animation for visual feedback (not tied to audio engine time yet)
-    useEffect(() => {
-        if (!isPlaying) {
-            if (animationFrameId.current) {
-                cancelAnimationFrame(animationFrameId.current);
-            }
-            if (playheadRef.current) {
-                playheadRef.current.style.transform = 'translateX(0px)';
-            }
-            return;
-        }
-
-        const bpm = 110;
-        const beatsPerSecond = bpm / 60;
-        const pixelsPerSecond = beatsPerSecond * PIXELS_PER_BEAT;
-        let startTime: number | null = null;
-        
-        const animate = (timestamp: number) => {
-            if (!startTime) startTime = timestamp;
-            const elapsedSeconds = (timestamp - startTime) / 1000;
-            let newLeft = elapsedSeconds * pixelsPerSecond;
-
-            if (newLeft > totalBeats * PIXELS_PER_BEAT) {
-                startTime = timestamp; // Loop
-                newLeft = 0;
-            }
-
-            if (playheadRef.current) {
-                playheadRef.current.style.transform = `translateX(${newLeft}px)`;
-            }
-            animationFrameId.current = requestAnimationFrame(animate);
-        };
-
-        animationFrameId.current = requestAnimationFrame(animate);
-
-        return () => {
-             if (animationFrameId.current) {
-                cancelAnimationFrame(animationFrameId.current);
-            }
-        }
-
-    }, [isPlaying, totalBeats]);
+const DAWView: React.FC = () => {
+    const [tracks, setTracks] = useState<DAWTrack[]>([]);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const fileInputRef = React.useRef<HTMLInputElement>(null);
     
+    useEffect(() => {
+        audioEngine.setDAWTracks(tracks);
+    }, [tracks]);
+
+    const addTrack = (name: string, buffer: AudioBuffer) => {
+        // Create a temporary context to instantiate nodes for type correctness.
+        // These will be replaced by the audio engine's nodes.
+        const tempAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const newTrack: DAWTrack = {
+            id: `track-${Date.now()}`,
+            name,
+            buffer,
+            volume: 0.8,
+            pan: 0,
+            isMuted: false,
+            isSoloed: false,
+            gainNode: tempAudioContext.createGain(),
+            // FIX: Use StereoPannerNode to match the updated DAWTrack type.
+            pannerNode: tempAudioContext.createStereoPanner()
+        };
+        tempAudioContext.close();
+        setTracks(prev => [...prev, newTrack]);
+    };
+
+    const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setIsLoading(true);
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            addTrack(file.name, audioBuffer);
+        } catch (error) {
+            console.error("Failed to load audio file:", error);
+            alert("Failed to load audio file. It might be corrupted or in an unsupported format.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleRecord = async () => {
+        if (isRecording) {
+            try {
+                setIsLoading(true);
+                const buffer = await audioEngine.stopRecording();
+                addTrack('Recording ' + new Date().toLocaleTimeString(), buffer);
+            } catch (error) {
+                console.error("Recording failed:", error);
+                alert(error);
+            } finally {
+                setIsLoading(false);
+                setIsRecording(false);
+            }
+        } else {
+            try {
+                await audioEngine.startRecording();
+                setIsRecording(true);
+            } catch (error) {
+                console.error("Could not start recording:", error);
+                alert(error);
+            }
+        }
+    };
+
+    const handlePlayToggle = () => {
+        if (isPlaying) {
+            audioEngine.stopDAW();
+            setIsPlaying(false);
+        } else {
+            audioEngine.playDAW();
+            setIsPlaying(true);
+        }
+    };
+
+    const onVolumeChange = useCallback((id: string, value: number) => {
+        setTracks(prev => prev.map(t => t.id === id ? { ...t, volume: value } : t));
+        audioEngine.updateTrackVolume(id, value);
+    }, []);
+    const onPanChange = useCallback((id: string, value: number) => {
+        setTracks(prev => prev.map(t => t.id === id ? { ...t, pan: value } : t));
+        audioEngine.updateTrackPan(id, value);
+    }, []);
+    const onMuteToggle = useCallback((id: string, isMuted: boolean) => {
+        setTracks(prev => prev.map(t => t.id === id ? { ...t, isMuted } : t));
+        audioEngine.toggleMute(id, isMuted);
+    }, []);
+    const onSoloToggle = useCallback((id: string, isSoloed: boolean) => {
+        setTracks(prev => prev.map(t => t.id === id ? { ...t, isSoloed } : t));
+        audioEngine.toggleSolo(id, isSoloed);
+    }, []);
+
     return (
-        <div className="h-full flex flex-col bg-background">
-            <div className="flex-grow flex overflow-hidden">
-                <div className="w-48 flex-shrink-0 bg-surface/50 border-r border-background">
-                    {/* Track Headers */}
-                    <div className="h-10 border-b border-background"></div>
-                    {tracks.map(trackName => (
-                         <div key={trackName} style={{ height: `${TRACK_HEIGHT}px`}}>
-                            <TrackHeader trackName={trackName} />
-                        </div>
-                    ))}
-                </div>
-                <div ref={timelineContainerRef} className="flex-grow overflow-x-auto">
-                    <div className="relative" style={{ width: `${totalBeats * PIXELS_PER_BEAT}px` }}>
-                        {/* Time Ruler */}
-                        <div className="h-10 border-b border-background sticky top-0 bg-surface/80 backdrop-blur-sm z-20">
-                             {[...Array(Math.ceil(totalBeats / 4))].map((_, barIndex) => (
-                                <div key={barIndex} className="absolute top-0 h-full flex items-center text-xs text-secondary" style={{ left: `${barIndex * 4 * PIXELS_PER_BEAT}px`}}>
-                                    <div className="w-px h-full bg-surface"></div>
-                                    <span className="pl-1">{barIndex + 1}</span>
-                                </div>
-                            ))}
-                        </div>
-                        
-                        {/* Track Lanes */}
-                        {/* FIX: Replaced faulty rendering logic with pre-calculated values for correctness and performance. */}
-                        {tracks.map((trackName, trackIndex) => (
-                             <div key={trackName} className="relative border-b border-background" style={{ height: `${TRACK_HEIGHT}px` }}>
-                                {/* Grid lines */}
-                                {[...Array(totalBeats)].map((_, beatIndex) => (
-                                     <div key={beatIndex} className={`absolute top-0 h-full w-px ${((beatIndex + 1) % 4 === 0) ? 'bg-surface' : 'bg-surface/50'}`} style={{ left: `${(beatIndex + 1) * PIXELS_PER_BEAT}px`}} />
-                                ))}
-
-                                {/* Clips for this track */}
-                                {sectionsWithStartBeats.map(section => {
-                                    const sectionPatterns = section.patterns.filter(p => p.type === trackName);
-                                    const sectionLengthBeats = section.length * 4;
-                                    
-                                    return sectionPatterns.map((p, i) => (
-                                        <PatternClip key={`${p.id}-${i}`} pattern={p} sectionStartBeats={section.startBeat} sectionLengthBeats={sectionLengthBeats} />
-                                    ));
-                                })}
-                             </div>
-                        ))}
-
-                        {/* Playhead */}
-                        <div ref={playheadRef} className="absolute top-0 h-full w-0.5 bg-accent z-30 pointer-events-none">
-                            <div className="absolute -top-1 -left-1.5 w-4 h-4 bg-accent transform rotate-45"></div>
-                        </div>
+        <div className="h-full flex flex-col bg-background text-primary">
+            {isLoading && <Loader message={isRecording ? 'Recording...' : 'Processing...'} />}
+            <div className="flex-shrink-0 p-2 border-b border-surface flex items-center space-x-4">
+                <button onClick={handlePlayToggle} className={`p-2 rounded-md ${isPlaying ? 'bg-hot-pink text-white' : 'bg-surface'}`}>
+                    {isPlaying ? <StopIcon /> : <PlayIcon />}
+                </button>
+                <button onClick={handleRecord} className={`p-2 rounded-full flex items-center space-x-2 ${isRecording ? 'bg-hot-pink text-white animate-pulse' : 'bg-surface'}`}>
+                    <MicrophoneIcon />
+                </button>
+                <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="audio/*" className="hidden" />
+                <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-md flex items-center space-x-2 bg-surface">
+                    <UploadIcon /> <span>Add Audio</span>
+                </button>
+            </div>
+            <div className="flex-grow flex overflow-x-auto">
+                {tracks.map(track => (
+                    <div key={track.id} className="w-48 flex-shrink-0">
+                        <TrackControls 
+                            track={track} 
+                            onVolumeChange={onVolumeChange}
+                            onPanChange={onPanChange}
+                            onMuteToggle={onMuteToggle}
+                            onSoloToggle={onSoloToggle}
+                        />
                     </div>
-                </div>
+                ))}
+                {tracks.length === 0 && (
+                    <div className="w-full h-full flex items-center justify-center text-secondary">
+                        <p>Your DAW is empty. Add some audio to get started.</p>
+                    </div>
+                )}
             </div>
         </div>
     );

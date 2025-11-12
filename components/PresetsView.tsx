@@ -17,8 +17,7 @@ const PresetCard: React.FC<{ preset: Preset, onApply: () => void }> = ({ preset,
             {Object.entries(preset.values).map(([paramId, value]) => (
                 <div key={paramId} className="flex justify-between font-mono">
                     <span>{paramId}:</span>
-                    {/* FIX: Coerce value to a number to safely call number methods. This prevents crashes if the API returns a non-numeric value and resolves the TypeScript error. */}
-                    <span className="font-semibold text-primary">{Number.isInteger(Number(value)) ? Number(value) : Number(value).toFixed(2)}</span>
+                    <span className="font-semibold text-primary">{!Number.isNaN(Number(value)) ? (Number.isInteger(Number(value)) ? Number(value) : Number(value).toFixed(2)) : 'N/A'}</span>
                 </div>
             ))}
         </div>

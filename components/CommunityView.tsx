@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { PluginTemplate, TemplateCategory } from '../types';
-import { SearchIcon, UserIcon, HeartIcon, DownloadStatIcon } from './icons';
+import { SearchIcon, UserIcon, HeartIcon, DownloadStatIcon, SpeakerActiveIcon } from './icons';
 import { fetchCommunityPlugins, CommunityPlugin } from '../services/apiService';
 import Loader from './Loader';
+import * as audioEngine from '../services/audioEngine';
 
 const FilterButton: React.FC<{ label: string; active: boolean; onClick: () => void; }> = ({ label, active, onClick }) => (
     <button onClick={onClick} className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${active ? 'bg-accent text-white' : 'bg-surface text-secondary hover:bg-background'}`}>
@@ -11,7 +12,16 @@ const FilterButton: React.FC<{ label: string; active: boolean; onClick: () => vo
 );
 
 const CommunityPluginCard: React.FC<{ plugin: CommunityPlugin; onLoad: (plugin: PluginTemplate) => void; }> = ({ plugin, onLoad }) => (
-    <div className="bg-surface/80 backdrop-blur-sm rounded-lg p-5 flex flex-col border border-background hover:border-accent/50 transition-all group hover:scale-105 hover:shadow-lg hover:shadow-accent-glow/20">
+    <div 
+        className="bg-surface/80 backdrop-blur-sm rounded-lg p-5 flex flex-col border border-background hover:border-accent/50 transition-all group hover:scale-105 hover:shadow-lg hover:shadow-accent-glow/20 relative"
+        onMouseEnter={() => audioEngine.previewPlugin(plugin)}
+        onMouseLeave={() => audioEngine.stopPreview()}
+    >
+        {plugin.framework === 'Web Audio' && (
+            <div className="absolute top-3 right-3 text-secondary group-hover:text-accent transition-colors">
+                <SpeakerActiveIcon />
+            </div>
+        )}
         <div className="flex-grow">
             <div className="flex items-center justify-between mb-3">
                 <h3 className="text-lg font-bold text-primary">{plugin.name}</h3>

@@ -1,16 +1,15 @@
 
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { AiGenerateIcon, CodeIcon, ConsoleIcon, ParametersIcon, PublishIcon, SaveIcon, TemplateIcon, TestIcon, VisualBuilderIcon, DownloadIcon, SignalChainIcon, TimeStretchIcon, MidiHumanizerIcon, ArrangementIcon, ShareIcon, DocsIcon, PresetsIcon, AnalyzeIcon, DawIcon, SocialIcon } from './icons';
+import { AiGenerateIcon, CodeIcon, ConsoleIcon, ParametersIcon, PublishIcon, SaveIcon, TemplateIcon, TestIcon, VisualBuilderIcon, DownloadIcon, SignalChainIcon, TimeStretchIcon, MidiHumanizerIcon, ArrangementIcon, ShareIcon, DocsIcon, PresetsIcon, AnalyzeIcon, DawIcon, SocialIcon, LogsIcon, SnapshotIcon, CompareIcon, AnalysisReportIcon, StemSeparatorIcon, MusicGenIcon } from './icons';
 import TemplatesView from './TemplatesView';
-import { PluginTemplate, ArrangementPattern, ArrangementSection } from '../types';
+import { PluginTemplate, ArrangementPattern, ArrangementSection, LogEntry, ProjectSnapshot } from '../types';
 import { generatePluginFromDescription, addModuleToProject, generatePluginFromSmartTemplate, refactorSignalChain } from '../services/geminiService';
 import Loader from './Loader';
 import ConsoleView from './ConsoleView';
+import LogsView from './LogsView';
 import VisualBuilderView from './VisualBuilderView';
 import SignalPatcher from './SignalPatcher';
 import * as audioEngine from '../services/audioEngine';
-import PlaybackControls from './PlaybackControls';
 import AutoTimeStretchView from './AutoTimeStretchView';
 import MidiHumanizerView from './MidiHumanizerView';
 import ArrangementAssistantView from './ArrangementAssistantView';
@@ -22,6 +21,11 @@ import AnalyzeView from './AnalyzeView';
 import DAWView from './DAWView';
 import CommunityView from './CommunityView';
 import AIGenerateView from './AIGenerateView';
+import SuggestionPrompts from './SuggestionPrompts';
+import SnapshotCompareView from './CompareView';
+import CompetitiveAnalysisView from './CompetitiveAnalysisView';
+import StemSeparationView from './StemSeparationView';
+import MusicGenView from './MusicGenView';
 
 
 // --- New View Components ---
@@ -32,40 +36,83 @@ const highlightCode = (code: string, framework: 'JUCE' | 'Web Audio') => {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+
+    // Use a placeholder trick to avoid re-highlighting already processed tokens
+    const replacements: string[] = [];
     
-    // Comments
-    highlighted = highlighted.replace(/(\/\/.*)/g, '<span style="color: #6A9955;">$1</span>'); // Green
-    highlighted = highlighted.replace(/(\/\*[\s\S]*?\*\/)/g, '<span style="color: #6A9955;">$1</span>'); // Green
+    // 1. Comments and Strings first, as they can contain anything
+    highlighted = highlighted.replace(/(".*?"|'.*?'|\/\/.*|\/\*[\s\S]*?\*\/)/g, (match) => {
+        let style = '';
+        if (match.startsWith('//') || match.startsWith('/*')) {
+            style = 'color: #6A9955;'; // Green for comments
+        } else if (match.startsWith('"') || match.startsWith("'")) {
+            style = 'color: #CE9178;'; // Orange for strings
+        }
+        
+        replacements.push(`<span style="${style}">${match}</span>`);
+        return `__REPLACE_${replacements.length - 1}__`;
+    });
 
-    // Strings
-    highlighted = highlighted.replace(/(".*?")/g, '<span style="color: #CE9178;">$1</span>'); // Orange
-    highlighted = highlighted.replace(/('.*?')/g, '<span style="color: #CE9178;">$1</span>'); // Orange
+    const juceKeywords = [
+        'alignas', 'alignof', 'and', 'and_eq', 'asm', 'auto', 'bitand', 'bitor',
+        'bool', 'break', 'case', 'catch', 'char', 'char8_t', 'char16_t', 'char32_t',
+        'class', 'compl', 'concept', 'const', 'consteval', 'constexpr', 'constinit',
+        'const_cast', 'continue', 'co_await', 'co_return', 'co_yield', 'decltype',
+        'default', 'delete', 'do', 'double', 'dynamic_cast', 'else', 'enum',
+        'explicit', 'export', 'extern', 'false', 'float', 'for', 'friend', 'goto',
+        'if', 'inline', 'int', 'long', 'mutable', 'namespace', 'new', 'noexcept',
+        'not', 'not_eq', 'nullptr', 'operator', 'or', 'or_eq', 'private',
+        'protected', 'public', 'register', 'reinterpret_cast', 'requires', 'return',
+        'short', 'signed', 'sizeof', 'static', 'static_assert', 'static_cast',
+        'struct', 'switch', 'template', 'this', 'thread_local', 'throw', 'true',
+        'try', 'typedef', 'typeid', 'typename', 'union', 'unsigned', 'using',
+        'virtual', 'void', 'volatile', 'wchar_t', 'while', 'xor', 'xor_eq',
+        'override' // JUCE specific
+    ];
+    const webAudioKeywords = [
+        'class', 'constructor', 'this', 'const', 'let', 'var', 'return', 'if', 
+        'else', 'for', 'while', 'new', 'function', 'true', 'false', 'import', 
+        'export', 'from', 'async', 'await', 'extends', 'super', 'get', 'set', 'static'
+    ];
+    const keywords = framework === 'JUCE' ? juceKeywords : webAudioKeywords;
+    const controlKeywords = ['if', 'for', 'while', 'switch', 'catch', 'try'];
 
-    // Keywords
-    const keywords = framework === 'JUCE' 
-        ? ['#include', 'namespace', 'class', 'public', 'private', 'protected', 'virtual', 'override', 'void', 'float', 'int', 'double', 'const', 'return', 'if', 'else', 'for', 'while', 'new', 'delete', 'this', 'true', 'false', 'auto', 'using', 'struct', 'enum']
-        : ['class', 'constructor', 'this', 'const', 'let', 'var', 'return', 'if', 'else', 'for', 'while', 'new', 'function', 'true', 'false', 'import', 'export', 'from', 'async', 'await', 'extends'];
-    const keywordRegex = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
-    highlighted = highlighted.replace(keywordRegex, '<span style="color: #569CD6;">$1</span>'); // Blue
-
-    // Types/Classes (simple regex for PascalCase)
+    // 2. Preprocessor directives (JUCE only)
     if (framework === 'JUCE') {
-         highlighted = highlighted.replace(/\b(juce::[A-Z][a-zA-Z0-9]+)\b/g, '<span style="color: #4EC9B0;">$1</span>'); // Teal
-         highlighted = highlighted.replace(/\b(std::[a-z]+)\b/g, '<span style="color: #4EC9B0;">$1</span>'); // Teal
+        highlighted = highlighted.replace(/(^|\n)(#\w+.*)/g, '$1<span style="color: #C586C0;">$2</span>');
     }
     
-    // Numbers
-    highlighted = highlighted.replace(/\b([0-9.]+f?)\b/g, '<span style="color: #B5CEA8;">$1</span>'); // Light green/purple
-    
-    // Function calls
-    highlighted = highlighted.replace(/([a-zA-Z0-9_]+)\(/g, '<span style="color: #DCDCAA;">$1</span>('); // Yellow
+    // 3. Types/Classes (PascalCase and std/juce namespaces)
+    if (framework === 'JUCE') {
+         highlighted = highlighted.replace(/\b(juce::\w+|std::\w+)\b/g, '<span style="color: #4EC9B0;">$1</span>');
+         highlighted = highlighted.replace(/\b([A-Z][a-zA-Z0-9_]*)\b/g, '<span style="color: #4EC9B0;">$1</span>');
+    }
+
+    // 4. Keywords
+    const keywordRegex = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
+    highlighted = highlighted.replace(keywordRegex, '<span style="color: #569CD6;">$1</span>');
+
+    // 5. Function Calls
+    highlighted = highlighted.replace(/\b([a-zA-Z_][\w]*)\s*(?=\()/g, (match) => {
+        if (controlKeywords.includes(match)) {
+            return match;
+        }
+        return `<span style="color: #DCDCAA;">${match}</span>`;
+    });
+
+    // 6. Numbers
+    highlighted = highlighted.replace(/\b([0-9.]+f?)\b/g, '<span style="color: #B5CEA8;">$1</span>');
+
+    // Put back the comments and strings
+    highlighted = highlighted.replace(/__REPLACE_(\d+)__/g, (match, index) => {
+        return replacements[parseInt(index)];
+    });
 
     return highlighted;
 };
 
 const CodeEditorView: React.FC<{ code: string; onCodeChange: (newCode: string) => void; framework: 'JUCE' | 'Web Audio' }> = ({ code, onCodeChange, framework }) => {
     const editorRef = useRef<HTMLTextAreaElement>(null);
-    // FIX: Changed ref type from HTMLElement to HTMLPreElement to match the element it's attached to.
     const highlightRef = useRef<HTMLPreElement>(null);
 
     const highlightedCode = React.useMemo(() => highlightCode(code, framework), [code, framework]);
@@ -192,7 +239,7 @@ const PublishView: React.FC = () => (
 
 // --- Main IDE Component ---
 
-type Tab = 'AI Generate' | 'Templates' | 'Social' | 'Time Stretch' | 'MIDI Humanizer' | 'Arrangement' | 'DAW' | 'Analyze' | 'Signal Chain' | 'Code Editor' | 'Visual Builder' | 'Parameters' | 'Presets' | 'Test' | 'Console' | 'Share' | 'Docs' | 'Publish';
+type Tab = 'AI Generate' | 'Templates' | 'Social' | 'Time Stretch' | 'MIDI Humanizer' | 'Arrangement' | 'DAW' | 'Stem Separation' | 'Music Gen' | 'AI Mix Assist' | 'Analysis' | 'Signal Chain' | 'Code Editor' | 'Visual Builder' | 'Parameters' | 'Presets' | 'Test' | 'Console' | 'Logs' | 'Share' | 'Docs' | 'Publish' | 'Snapshot Compare';
 
 const IdeTab: React.FC<{ icon: React.ReactNode; label: Tab; activeTab: Tab; onClick: (tab: Tab) => void; }> = ({ icon, label, activeTab, onClick }) => (
     <button
@@ -232,16 +279,15 @@ const PluginDevelopmentIDE: React.FC = () => {
     const [activeTab, setActiveTab] = useState<Tab>('Templates');
     const [activeProject, setActiveProject] = useState<PluginTemplate | null>(null);
     const [projectCode, setProjectCode] = useState<string>('');
+    const [snapshots, setSnapshots] = useState<Record<string, ProjectSnapshot[]>>({});
     const [consoleMessages, setConsoleMessages] = useState<string[]>(['Welcome to Amapiano AI Plugin IDE.']);
+    const [runtimeLogs, setRuntimeLogs] = useState<LogEntry[]>([]);
     const [isProcessing, setIsProcessing] = useState(false); // For both compiling and AI module adding
     const [compilationSuccess, setCompilationSuccess] = useState(false);
     const [compileProgress, setCompileProgress] = useState<number | null>(null);
     const [contentKey, setContentKey] = useState(0); // Used to re-trigger animation
-    const [isPlaying, setIsPlaying] = useState(false);
     const [isAudioReady, setIsAudioReady] = useState(false);
     const [globalError, setGlobalError] = useState<string | null>(null);
-    const [sampleGain, setSampleGain] = useState(1);
-    const [samplePlaybackRate, setSamplePlaybackRate] = useState(1);
     const [paramValues, setParamValues] = useState<Record<string, number>>({});
     const [patterns, setPatterns] = useState<ArrangementPattern[]>(initialPatterns);
     const [arrangement, setArrangement] = useState<ArrangementSection[]>(initialArrangement);
@@ -252,12 +298,20 @@ const PluginDevelopmentIDE: React.FC = () => {
         const timestamp = new Date().toLocaleTimeString();
         setConsoleMessages(prev => [...prev, `<span class="text-gray-500">[${timestamp}]</span> ${message}`]);
     }, []);
+    
+    const logToRuntimeConsole = useCallback((log: LogEntry) => {
+        setRuntimeLogs(prev => [...prev, log]);
+    }, []);
+    
+    const handleClearRuntimeLogs = () => {
+        setRuntimeLogs([]);
+    };
 
     // Auto-save to localStorage
     useEffect(() => {
         if (activeProject) {
             try {
-                const projectJson = JSON.stringify({ project: activeProject, arrangement, patterns });
+                const projectJson = JSON.stringify({ project: activeProject, code: projectCode, arrangement, patterns, allSnapshots: snapshots });
                 localStorage.setItem('amapiano-ai-autosave', projectJson);
             } catch (error) {
                 console.error("Auto-save failed:", error);
@@ -265,7 +319,7 @@ const PluginDevelopmentIDE: React.FC = () => {
         } else {
             localStorage.removeItem('amapiano-ai-autosave');
         }
-    }, [activeProject, arrangement, patterns]);
+    }, [activeProject, projectCode, arrangement, patterns, snapshots]);
 
     // Load from localStorage on mount
     useEffect(() => {
@@ -275,8 +329,10 @@ const PluginDevelopmentIDE: React.FC = () => {
                 const savedState = JSON.parse(savedProjectJson);
                 if (savedState.project && savedState.project.id) {
                     setActiveProject(savedState.project);
+                    setProjectCode(savedState.code || savedState.project.code);
                     setArrangement(savedState.arrangement || initialArrangement);
                     setPatterns(savedState.patterns || initialPatterns);
+                    setSnapshots(savedState.allSnapshots || {});
                     const timestamp = new Date().toLocaleTimeString();
                     setConsoleMessages(prev => [...prev, `<span class="text-gray-500">[${timestamp}]</span> Restored auto-saved project: <span class="text-accent-hover font-semibold">${savedState.project.name}</span>`]);
                     setActiveTab('Visual Builder');
@@ -347,24 +403,15 @@ const PluginDevelopmentIDE: React.FC = () => {
     useEffect(() => {
         if (activeProject) {
             setProjectCode(activeProject.code);
+            setRuntimeLogs([]); // Clear logs when project changes
 
             const initialValues = activeProject.parameters.reduce((acc, p) => {
                 acc[p.id] = p.defaultValue;
                 return acc;
             }, {} as Record<string, number>);
             setParamValues(initialValues);
-
-            if (activeProject.framework === 'Web Audio') {
-                audioEngine.connectPlugin(activeProject);
-                 for (const [id, value] of Object.entries(initialValues)) {
-                    audioEngine.setParam(id, value as number);
-                }
-            } else {
-                audioEngine.disconnectPlugin();
-            }
         } else {
             setProjectCode('');
-            audioEngine.disconnectPlugin();
         }
     }, [activeProject]);
 
@@ -374,28 +421,15 @@ const PluginDevelopmentIDE: React.FC = () => {
 
     const handleParamChange = useCallback((id: string, value: number) => {
         setParamValues(prev => ({...prev, [id]: value}));
-        if (activeProject && activeProject.framework === 'Web Audio') {
-            audioEngine.setParam(id, value);
-        }
-    }, [activeProject]);
+    }, []);
 
     const handleApplyPreset = useCallback((values: Record<string, number>) => {
         setParamValues(values);
-        if (activeProject && activeProject.framework === 'Web Audio') {
-            for (const [id, value] of Object.entries(values)) {
-                audioEngine.setParam(id, value);
-            }
-        }
-    }, [activeProject]);
+    }, []);
     
     const handleCloseProject = () => {
         if (activeProject) {
             logToConsole(`Project "<span class="text-accent-hover font-semibold">${activeProject.name}</span>" closed.`);
-        }
-        if (isPlaying) {
-            audioEngine.stopSampleLoop();
-            audioEngine.stopDAW();
-            setIsPlaying(false);
         }
         setActiveProject(null);
         setCompilationSuccess(false);
@@ -473,56 +507,40 @@ const PluginDevelopmentIDE: React.FC = () => {
         }
     };
 
-    const togglePlay = async () => {
-        if (isPlaying) {
-            if (activeTab === 'DAW') {
-                audioEngine.stopDAW();
-            } else {
-                audioEngine.stopSampleLoop();
-            }
-            setIsPlaying(false);
-        } else {
-            if (activeTab === 'DAW') {
-                if (activeProject?.type === 'instrument') {
-                    audioEngine.playDAW(arrangement, 110, (p) => { /* set playhead pos */ });
-                    setIsPlaying(true);
-                } else {
-                    logToConsole(`<span class="text-hot-pink">DAW playback is only available for 'instrument' type plugins.</span>`);
-                }
-            } else {
-                await audioEngine.playSampleLoop();
-                setIsPlaying(true);
-            }
+    const handleTakeSnapshot = () => {
+        if (!activeProject) return;
+        const snapshotName = prompt("Enter a name for this snapshot:", `Snapshot at ${new Date().toLocaleTimeString()}`);
+        if (snapshotName) {
+            const newSnapshot: ProjectSnapshot = {
+                id: crypto.randomUUID(),
+                name: snapshotName,
+                timestamp: new Date().toISOString(),
+                project: { ...activeProject, code: projectCode }
+            };
+            setSnapshots(prev => ({
+                ...prev,
+                [activeProject.id]: [...(prev[activeProject.id] || []), newSnapshot]
+            }));
+            logToConsole(`📸 Snapshot created: <span class="font-semibold">${snapshotName}</span>`);
         }
     };
 
-    const handleGainChange = (newGain: number) => {
-        setSampleGain(newGain);
-        audioEngine.setSampleGain(newGain);
+    const handleRestoreSnapshot = (snapshot: ProjectSnapshot) => {
+        if (window.confirm(`Are you sure you want to restore "${snapshot.name}"? This will overwrite your current unsaved changes.`)) {
+            setActiveProject(snapshot.project);
+            logToConsole(`⏪ Restored from snapshot: <span class="font-semibold">${snapshot.name}</span>`);
+            setActiveTab('Visual Builder');
+        }
     };
-
-    const handleRateChange = (newRate: number) => {
-        setSamplePlaybackRate(newRate);
-        audioEngine.setSamplePlaybackRate(newRate);
-    };
-
-    const showSamplePlaybackControls = activeProject?.framework === 'Web Audio' && activeTab !== 'DAW' && activeTab !== 'Arrangement';
-
 
     const renderContent = () => {
-        const noProjectViews: Tab[] = ['Templates', 'AI Generate', 'Social', 'Time Stretch', 'MIDI Humanizer', 'Arrangement', 'DAW'];
+        const noProjectViews: Tab[] = ['Templates', 'AI Generate', 'Social', 'Time Stretch', 'MIDI Humanizer', 'Arrangement', 'DAW', 'Stem Separation', 'Music Gen', 'Analysis', 'Console', 'Logs', 'Docs', 'Snapshot Compare'];
+        if (activeTab === 'Analysis') return <CompetitiveAnalysisView />;
+
         const noProject = !activeProject && !noProjectViews.includes(activeTab);
 
         if (noProject) {
-             return (
-                <div className="p-8 text-center text-secondary h-full flex flex-col justify-center items-center">
-                    <h3 className="text-xl font-semibold text-primary">No Active Project</h3>
-                    <p className="mt-2">Please select a template or use AI Generate to begin.</p>
-                     <button onClick={() => setActiveTab('Templates')} className="mt-4 bg-accent text-primary font-semibold py-2 px-4 rounded-lg hover:bg-accent-hover transition-colors">
-                        Go to Templates
-                    </button>
-                </div>
-            );
+             return <SuggestionPrompts />;
         }
 
         switch (activeTab) {
@@ -537,8 +555,12 @@ const PluginDevelopmentIDE: React.FC = () => {
             case 'Arrangement':
                 return <ArrangementAssistantView patterns={patterns} arrangement={arrangement} onArrangementChange={setArrangement} />;
             case 'DAW':
-                return <DAWView arrangement={arrangement} patterns={patterns} isPlaying={isPlaying} />;
-            case 'Analyze':
+                return <DAWView />;
+            case 'Stem Separation':
+                return <StemSeparationView />;
+             case 'Music Gen':
+                return <MusicGenView />;
+            case 'AI Mix Assist':
                 return activeProject && <AnalyzeView project={activeProject} analyserNode={analyserNode.current} paramValues={paramValues} log={logToConsole} />;
             case 'Signal Chain':
                 return activeProject && <SignalPatcher project={activeProject} onReorder={handleReorderChain} onAddModule={handleAddModule} isProcessing={isProcessing} />;
@@ -554,20 +576,24 @@ const PluginDevelopmentIDE: React.FC = () => {
                 return activeProject && <TestView />;
             case 'Console':
                 return <ConsoleView messages={consoleMessages} compilationSuccess={compilationSuccess} project={activeProject} isProcessing={isProcessing} compileProgress={compileProgress} />;
+            case 'Logs':
+                return <LogsView logs={runtimeLogs} onClear={handleClearRuntimeLogs} isWebAudioProject={activeProject?.framework === 'Web Audio'} />;
             case 'Share':
                 return activeProject && <ShareView project={activeProject} />;
             case 'Docs':
-                return activeProject && <DocsView project={activeProject} log={logToConsole} />;
+                return <DocsView project={activeProject} log={logToConsole} />;
             case 'Publish':
                 return activeProject && <PublishView />;
             case 'AI Generate':
                 return <AIGenerateView onPluginGenerated={handleSelectTemplate} log={logToConsole} />;
+            case 'Snapshot Compare':
+                return activeProject && <SnapshotCompareView project={activeProject} code={projectCode} snapshots={snapshots[activeProject.id] || []} onRestore={handleRestoreSnapshot} />;
             default:
                 return null;
         }
     };
     
-    const projectName = activeProject ? `${activeProject.name}` : "Untitled Plugin";
+    const projectName = activeProject ? `${activeProject.name}` : "Amapiano AI Suite";
 
     return (
         <div className="bg-surface rounded-xl border border-background shadow-2xl overflow-hidden shadow-accent-glow/10">
@@ -587,23 +613,7 @@ const PluginDevelopmentIDE: React.FC = () => {
                     </div>
                 </div>
                 <div className="flex items-center space-x-2">
-                    {showSamplePlaybackControls && isAudioReady && (
-                         <PlaybackControls
-                            isPlaying={isPlaying}
-                            onTogglePlay={togglePlay}
-                            gain={sampleGain}
-                            onGainChange={handleGainChange}
-                            playbackRate={samplePlaybackRate}
-                            onRateChange={handleRateChange}
-                            log={logToConsole}
-                        />
-                    )}
-                    {activeTab === 'DAW' && (
-                         <ActionButton onClick={togglePlay}>
-                            {isPlaying ? "Stop DAW" : "Play DAW"}
-                         </ActionButton>
-                    )}
-                    <ActionButton disabled={!activeProject}><SaveIcon /> Save</ActionButton>
+                    <ActionButton onClick={handleTakeSnapshot} disabled={!activeProject}><SnapshotIcon /> Snapshot</ActionButton>
                     <ActionButton primary onClick={handleCompile} disabled={!activeProject || isProcessing}>
                          {isProcessing && compileProgress !== null ? (
                             <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -613,8 +623,6 @@ const PluginDevelopmentIDE: React.FC = () => {
                         ) : null}
                         {isProcessing ? 'Processing...' : 'Compile'}
                     </ActionButton>
-                    <ActionButton onClick={() => setActiveTab('Test')} disabled={!activeProject}>Test</ActionButton>
-                    <ActionButton onClick={() => setActiveTab('Publish')} disabled={!activeProject}>Publish</ActionButton>
                     {activeProject &&
                         <button onClick={handleCloseProject} className="text-secondary hover:text-primary ml-2" title="Close Project">
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -628,11 +636,15 @@ const PluginDevelopmentIDE: React.FC = () => {
                 <IdeTab icon={<AiGenerateIcon />} label="AI Generate" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<TemplateIcon />} label="Templates" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<SocialIcon />} label="Social" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<AnalysisReportIcon />} label="Analysis" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<StemSeparatorIcon />} label="Stem Separation" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<MusicGenIcon />} label="Music Gen" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<TimeStretchIcon />} label="Time Stretch" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<MidiHumanizerIcon />} label="MIDI Humanizer" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<ArrangementIcon />} label="Arrangement" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<DawIcon />} label="DAW" activeTab={activeTab} onClick={setActiveTab} />
-                <IdeTab icon={<AnalyzeIcon />} label="Analyze" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<AnalyzeIcon />} label="AI Mix Assist" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<CompareIcon />} label="Snapshot Compare" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<SignalChainIcon />} label="Signal Chain" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<CodeIcon />} label="Code Editor" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<VisualBuilderIcon />} label="Visual Builder" activeTab={activeTab} onClick={setActiveTab} />
@@ -640,6 +652,7 @@ const PluginDevelopmentIDE: React.FC = () => {
                 <IdeTab icon={<PresetsIcon />} label="Presets" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<TestIcon />} label="Test" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<ConsoleIcon />} label="Console" activeTab={activeTab} onClick={setActiveTab} />
+                <IdeTab icon={<LogsIcon />} label="Logs" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<ShareIcon />} label="Share" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<DocsIcon />} label="Docs" activeTab={activeTab} onClick={setActiveTab} />
                 <IdeTab icon={<PublishIcon />} label="Publish" activeTab={activeTab} onClick={setActiveTab} />

@@ -26,7 +26,7 @@ export interface PluginTemplate {
 }
 
 export interface Preset {
-    name: string;
+    name:string;
     values: Record<string, number>;
 }
 
@@ -48,4 +48,41 @@ export interface ArrangementSection {
     name: string;
     length: number; // in bars
     patterns: ArrangementPattern[];
+}
+
+export interface LogEntry {
+    level: 'log' | 'warn' | 'error' | 'info';
+    timestamp: string;
+    message: any[];
+}
+
+export interface ProjectSnapshot {
+  id: string;
+  name: string;
+  timestamp: string;
+  project: PluginTemplate;
+}
+
+export interface DAWTrack {
+  id: string;
+  name: string;
+  buffer: AudioBuffer;
+  sourceNode?: AudioBufferSourceNode;
+  gainNode: GainNode;
+  // FIX: PannerNode does not have a 'pan' property. StereoPannerNode should be used for stereo panning.
+  pannerNode: StereoPannerNode;
+  volume: number; // 0-1
+  pan: number; // -1 to 1
+  isMuted: boolean;
+  isSoloed: boolean;
+}
+
+export interface Stem {
+  name: 'Vocals' | 'Drums' | 'Bass' | 'Other';
+  buffer: AudioBuffer | null;
+  sourceNode?: AudioBufferSourceNode;
+  gainNode?: GainNode;
+  volume: number;
+  isPlaying: boolean;
+  color: string;
 }

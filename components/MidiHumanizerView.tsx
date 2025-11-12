@@ -1,8 +1,10 @@
 
+
 import React, { useState } from 'react';
 import { humanizeMidiPattern } from '../services/audioProcessingService';
 import { MidiNote } from '../types';
 import Loader from './Loader';
+import * as audioEngine from '../services/audioEngine';
 
 const PianoRollNote: React.FC<{ start: number, duration: number, pitch: number, velocity: number, humanized?: boolean }> = ({ start, duration, pitch, velocity, humanized }) => {
     const top = (11 - pitch) * 8.333; // 100% / 12 notes
@@ -50,6 +52,16 @@ const MidiHumanizerView: React.FC = () => {
             setIsLoading(false);
         }
     };
+    
+    const handlePlayOriginal = () => {
+        audioEngine.playMidiPattern(originalPattern, 120);
+    };
+
+    const handlePlayHumanized = () => {
+        if (humanizedPattern) {
+            audioEngine.playMidiPattern(humanizedPattern, 120);
+        }
+    };
 
     return (
          <div className="p-8 h-full relative">
@@ -59,7 +71,13 @@ const MidiHumanizerView: React.FC = () => {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 bg-background/50 border border-surface rounded-xl p-6">
-                    <h4 className="font-semibold text-primary mb-3">MIDI Pattern Viewer</h4>
+                    <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-semibold text-primary">MIDI Pattern Viewer</h4>
+                        <div className="flex items-center space-x-2">
+                             <button onClick={handlePlayOriginal} className="bg-surface text-primary font-semibold py-2 px-4 rounded-lg hover:bg-background transition-colors text-sm">Play Original</button>
+                             <button onClick={handlePlayHumanized} disabled={!humanizedPattern} className="bg-hot-pink/80 text-white font-semibold py-2 px-4 rounded-lg hover:bg-hot-pink transition-colors text-sm disabled:opacity-50">Play Humanized</button>
+                        </div>
+                    </div>
                     <div className="bg-surface p-2 rounded-lg border border-background">
                        <div className="relative w-full aspect-[2/1] bg-background rounded">
                          {/* Grid Lines */}

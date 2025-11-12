@@ -1,14 +1,25 @@
 
+
 import React, { useState } from 'react';
 import { PluginTemplate } from '../types';
 import { generatePluginFromDescription, generatePluginFromSmartTemplate } from '../services/geminiService';
 import Loader from './Loader';
-import { AiGenerateIcon, DownloadIcon } from './icons';
+import { AiGenerateIcon, DownloadIcon, SpeakerActiveIcon } from './icons';
 import MultiModalInput from './MultiModalInput';
+import * as audioEngine from '../services/audioEngine';
 
 
 const AIGeneratedTemplateCard: React.FC<{ template: PluginTemplate; onSelect: (template: PluginTemplate) => void; }> = ({ template, onSelect }) => (
-    <div className="bg-surface/80 backdrop-blur-sm rounded-lg p-5 flex flex-col border-2 border-accent shadow-[0_0_15px_rgba(138,66,214,0.5)]">
+    <div 
+        className="bg-surface/80 backdrop-blur-sm rounded-lg p-5 flex flex-col border-2 border-accent shadow-[0_0_15px_rgba(138,66,214,0.5)] relative group"
+        onMouseEnter={() => audioEngine.previewPlugin(template)}
+        onMouseLeave={() => audioEngine.stopPreview()}
+    >
+         {template.framework === 'Web Audio' && (
+            <div className="absolute top-3 right-3 text-accent">
+                <SpeakerActiveIcon />
+            </div>
+        )}
         <div className="flex-grow">
             <div className="flex items-center space-x-4 mb-3">
                  <div className="bg-accent/20 p-3 rounded-full text-accent">

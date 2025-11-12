@@ -1,7 +1,9 @@
 
+
 import React, { useState, useMemo } from 'react';
 import { PluginTemplate, TemplateCategory } from '../types';
-import { SearchIcon, DownloadIcon } from './icons';
+import { SearchIcon, DownloadIcon, SpeakerActiveIcon } from './icons';
+import * as audioEngine from '../services/audioEngine';
 
 const juceBoilerplate = `
 /*
@@ -306,7 +308,16 @@ const Tag: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const TemplateCard: React.FC<{ template: PluginTemplate; onSelect: (template: PluginTemplate, source: 'template') => void; }> = ({ template, onSelect }) => (
-    <div className="bg-surface/80 backdrop-blur-sm rounded-lg p-5 flex flex-col border border-background hover:border-accent/50 transition-all group hover:scale-105 hover:shadow-lg hover:shadow-accent-glow/20">
+    <div 
+        className="bg-surface/80 backdrop-blur-sm rounded-lg p-5 flex flex-col border border-background hover:border-accent/50 transition-all group hover:scale-105 hover:shadow-lg hover:shadow-accent-glow/20 relative"
+        onMouseEnter={() => audioEngine.previewPlugin(template)}
+        onMouseLeave={() => audioEngine.stopPreview()}
+    >
+        {template.framework === 'Web Audio' && (
+            <div className="absolute top-3 right-3 text-secondary group-hover:text-accent transition-colors">
+                <SpeakerActiveIcon />
+            </div>
+        )}
         <div className="flex-grow">
             <div className="flex items-center space-x-4 mb-3">
                  <div className="bg-background p-3 rounded-full group-hover:bg-accent/20 transition-colors">

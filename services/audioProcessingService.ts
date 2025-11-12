@@ -71,8 +71,7 @@ export const humanizeMidiPattern = async (
 
     try {
         const response = await ai.models.generateContent({
-            // FIX: Use a more powerful model for JSON generation to ensure schema adherence.
-            model: "gemini-2.5-pro",
+            model: "gemini-2.5-flash",
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
@@ -191,8 +190,7 @@ export const timeStretchAudio = async (
         await new Promise(resolve => setTimeout(resolve, 1500)); 
 
         const response = await ai.models.generateContent({
-            // FIX: Use a more powerful model for JSON generation to ensure schema adherence.
-            model: "gemini-2.5-pro",
+            model: "gemini-2.5-flash",
             contents: prompt,
             config: {
                 responseMimeType: "application/json",

@@ -4,13 +4,19 @@ import { generateDocumentation } from '../services/geminiService';
 import Loader from './Loader';
 import { DocsIcon } from './icons';
 
-const DocsView: React.FC<{ project: PluginTemplate; log: (message: string) => void; }> = ({ project, log }) => {
+interface DocsViewProps {
+    project: PluginTemplate | null;
+    log: (message: string) => void;
+}
+
+const DocsView: React.FC<DocsViewProps> = ({ project, log }) => {
     const [docsContent, setDocsContent] = useState<string>('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [copySuccess, setCopySuccess] = useState('');
 
     const handleGenerateDocs = async () => {
+        if (!project) return;
         setIsLoading(true);
         setError(null);
         setCopySuccess('');
@@ -40,6 +46,18 @@ const DocsView: React.FC<{ project: PluginTemplate; log: (message: string) => vo
             console.error('Could not copy text: ', err);
         });
     };
+    
+    if (!project) {
+        return (
+            <div className="p-8 h-full flex flex-col justify-center items-center text-center">
+                <div className="text-accent mb-4">
+                    <DocsIcon />
+                </div>
+                <h3 className="text-xl font-bold text-primary mb-2">Documentation Hub</h3>
+                <p className="text-secondary mt-1">Create or load a project to generate its user manual using AI.</p>
+            </div>
+        );
+    }
 
     return (
         <div className="p-8 h-full flex flex-col">

@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { PluginTemplate, Preset } from "../types";
+import { PluginTemplate, Preset, MidiNote } from "../types";
 import { dspSources } from './dsp';
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
@@ -88,6 +88,47 @@ const presetsGenerationSchema = {
         }
     },
     required: ["presets"]
+};
+
+const stemSeparationSchema = {
+    type: Type.OBJECT,
+    properties: {
+        stems: {
+            type: Type.ARRAY,
+            description: "An array of objects, each representing a separated audio stem.",
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    name: { type: Type.STRING, enum: ['Vocals', 'Drums', 'Bass', 'Other'] },
+                    description: { type: Type.STRING, description: "A brief, 1-sentence description of the stem's content."}
+                },
+                required: ["name", "description"]
+            }
+        }
+    },
+    required: ["stems"]
+};
+
+const musicGenerationSchema = {
+    type: Type.OBJECT,
+    properties: {
+        description: { type: Type.STRING, description: "A creative description of the generated music."},
+        midiNotes: {
+            type: Type.ARRAY,
+            description: "An array of MIDI notes for the generated pattern, up to 16 beats long.",
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    pitch: { type: Type.INTEGER, description: "MIDI pitch (e.g., 60 for C4)." },
+                    start: { type: Type.NUMBER, description: "Start time in beats." },
+                    duration: { type: Type.NUMBER, description: "Duration in beats." },
+                    velocity: { type: Type.INTEGER, description: "Note velocity (0-127)." }
+                },
+                required: ["pitch", "start", "duration", "velocity"]
+            }
+        }
+    },
+    required: ["description", "midiNotes"]
 };
 
 
@@ -424,7 +465,7 @@ export const generatePresets = async (project: PluginTemplate, count: number = 6
 
     try {
         const response = await ai.models.generateContent({
-            model: "gemini-2.5-pro",
+            model: "gemini-2.5-flash",
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
@@ -489,5 +530,63 @@ export const getAudioFeedback = async (
     } catch (error) {
         console.error("Error generating audio feedback:", error);
         throw new Error("The AI advisor is currently unavailable.");
+    }
+};
+
+export const separateStems = async (fileName: string): Promise<{name: 'Vocals' | 'Drums' | 'Bass' | 'Other', description: string}[]> => {
+    const prompt = `
+        You are an AI audio processing engine specializing in source separation.
+        A user has uploaded a file named "${fileName}".
+        Your task is to simulate the separation of this audio into four standard stems: Vocals, Drums, Bass, and Other.
+        For each stem, provide a brief, one-sentence description of its likely content based on a typical song structure.
+
+        Return a single JSON object containing a 'stems' array with four objects, one for each stem type. Do not include markdown formatting.
+    `;
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: stemSeparationSchema,
+            }
+        });
+        const parsed = parseJsonResponse(response.text);
+        return parsed.stems;
+
+    } catch(e) {
+        console.error("Error separating stems:", e);
+        throw new Error("AI stem separation failed.");
+    }
+};
+
+export const generateMusicFromPrompt = async (promptText: string): Promise<{ description: string, midiNotes: MidiNote[] }> => {
+    const prompt = `
+        You are a creative AI music composer specializing in Amapiano.
+        A user has provided the following prompt: "${promptText}".
+        
+        Your task is to:
+        1.  Generate a compelling, 4-bar (16-beat) MIDI pattern that fits the user's prompt.
+        2.  The pattern should be musically interesting and rhythmically characteristic of the Amapiano genre. Use typical elements like log drums on off-beats and simple, catchy melodies.
+        3.  Provide a short, creative description of the music you've generated.
+        4.  Ensure all MIDI note properties (pitch, start, duration, velocity) are valid numbers. Pitch should be in the range 36-84.
+
+        Return a single JSON object containing the description and the midiNotes array. Do not include markdown formatting.
+    `;
+     try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-pro',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: musicGenerationSchema,
+            }
+        });
+        const parsed = parseJsonResponse(response.text);
+        return parsed;
+
+    } catch(e) {
+        console.error("Error generating music:", e);
+        throw new Error("AI music generation failed.");
     }
 };
